@@ -1,6 +1,7 @@
 import {
   BaseError,
   ContractFunctionRevertedError,
+  LimitExceededRpcError,
   TransactionReceipt,
   UserRejectedRequestError,
 } from 'viem';
@@ -82,6 +83,38 @@ export function parseContractError(err: unknown): { message: string; userRejecte
     message: fallback,
     userRejected: false,
   };
+}
+
+/**
+ * Helper to strictly detect EIP-1474 / JSON-RPC error code -32005 (LimitExceededRpcError).
+ * Used exclusively to guard the Create Bounty gas-estimation fallback path without swallowing
+ * contract reverts, user rejections, or insufficient balance errors.
+ */
+export function isLimitExceededError(err: unknown): boolean {
+  if (!err) return false;
+
+  if (err instanceof LimitExceededRpcError) {
+    return true;
+  }
+
+  if (err instanceof BaseError) {
+    const matched = err.walk((e) => {
+      if (!e) return false;
+      if (e instanceof LimitExceededRpcError) return true;
+      if (typeof e === 'object' && 'code' in e && (e as any).code === -32005) return true;
+      if (typeof e === 'object' && 'name' in e && (e as any).name === 'LimitExceededRpcError') return true;
+      return false;
+    });
+    if (matched) return true;
+  }
+
+  const anyErr = err as any;
+  if (anyErr?.code === -32005 || anyErr?.cause?.code === -32005) {
+    return true;
+  }
+
+  const msg = (anyErr?.message || anyErr?.shortMessage || String(err)).toLowerCase();
+  return msg.includes('request exceeds defined limit') || msg.includes('-32005');
 }
 
 /**
@@ -308,9 +341,10 @@ export async function resolveDispute(
  */
 async function executeBountyWrite(
   functionName: any,
-  args: any[],
+  args: any[] | readonly any[],
   value?: bigint,
-  onPending?: (hash: `0x${string}`) => void
+  onPending?: (hash: `0x${string}`) => void,
+  gas?: bigint
 ): Promise<WriteTxResult> {
   try {
     const account = await getValidatedAccount();
@@ -323,6 +357,7 @@ async function executeBountyWrite(
       args,
       account,
       value,
+      ...(gas ? { gas } : {}),
     });
 
     if (onPending) {
@@ -360,7 +395,23 @@ async function executeBountyWrite(
 }
 
 /**
+ * Safe fallback gas limit applied ONLY when createBounty gas estimation fails
+ * specifically due to Monad Testnet RPC rate-limiting / EIP-1474 code -32005 (LimitExceededRpcError).
+ *
+ * Normal onchain gas estimation is always preferred and attempted first.
+ * The 350,000 gas value is only a fallback for Monad Testnet -32005 estimation-limit errors,
+ * providing an ample safety buffer over the simulated ~276,300 gas consumed by createBounty.
+ */
+export const CREATE_BOUNTY_FALLBACK_GAS = 350000n;
+
+/**
  * Creator creates and funds a permissionless work bounty with native MON.
+ *
+ * Normal gas estimation is preferred and attempted first.
+ * If normal estimation fails specifically with -32005 (LimitExceededRpcError / "Request exceeds defined limit"),
+ * it retries/falls back using CREATE_BOUNTY_FALLBACK_GAS (350000n).
+ * If estimation fails for any other reason (e.g. revert, insufficient balance),
+ * the fallback is NOT used and the original error is preserved and returned.
  */
 export async function createBounty(
   taskTitle: string,
@@ -372,25 +423,80 @@ export async function createBounty(
   rewardWei: bigint,
   onPending?: (hash: `0x${string}`) => void
 ): Promise<WriteTxResult> {
-  const nowUnix = BigInt(Math.floor(Date.now() / 1000));
-  const submissionDeadline = nowUnix + BigInt(durationSeconds);
-  const metadataPayload = JSON.stringify({
-    title: taskTitle,
-    description: taskMetadataUri,
-    criteria: acceptanceCriteria,
-  });
+  try {
+    const account = await getValidatedAccount();
+    const nowUnix = BigInt(Math.floor(Date.now() / 1000));
+    const submissionDeadline = nowUnix + BigInt(durationSeconds);
+    const metadataPayload = JSON.stringify({
+      title: taskTitle,
+      description: taskMetadataUri,
+      criteria: acceptanceCriteria,
+    });
 
-  return executeBountyWrite(
-    'createBounty',
-    [
+    const args = [
       submissionDeadline,
       maxSubmissions,
       disputeResolver,
       metadataPayload,
-    ],
-    rewardWei,
-    onPending
-  );
+    ] as const;
+
+    // 1. Normal gas estimation is preferred and attempted first
+    let gasLimit: bigint | undefined;
+    try {
+      gasLimit = await publicClient.estimateContractGas({
+        address: SETTLEX_BOUNTY_ADDRESS,
+        abi: SETTLEX_BOUNTY_ABI,
+        functionName: 'createBounty',
+        args,
+        value: rewardWei,
+        account,
+      });
+    } catch (estErr) {
+      // 2. ONLY fallback if normal estimation fails specifically with -32005 / LimitExceededRpcError
+      if (isLimitExceededError(estErr)) {
+        gasLimit = CREATE_BOUNTY_FALLBACK_GAS;
+      } else {
+        // 3. For any other estimation error (reverts, insufficient balance, etc.), do NOT use fallback
+        const parsed = parseContractError(estErr);
+        return {
+          success: false,
+          error: parsed.message,
+          userRejected: parsed.userRejected,
+        };
+      }
+    }
+
+    // 4. Send the transaction using the normal estimated gas or fallback gas limit
+    let result = await executeBountyWrite(
+      'createBounty',
+      args,
+      rewardWei,
+      onPending,
+      gasLimit
+    );
+
+    // 5. If normal estimation on publicClient passed but the wallet's internal
+    // submission dispatch subsequently failed specifically with -32005,
+    // retry once with the explicit fallback gas limit.
+    if (!result.success && isLimitExceededError(result.error) && gasLimit !== CREATE_BOUNTY_FALLBACK_GAS) {
+      result = await executeBountyWrite(
+        'createBounty',
+        args,
+        rewardWei,
+        onPending,
+        CREATE_BOUNTY_FALLBACK_GAS
+      );
+    }
+
+    return result;
+  } catch (err) {
+    const parsed = parseContractError(err);
+    return {
+      success: false,
+      error: parsed.message,
+      userRejected: parsed.userRejected,
+    };
+  }
 }
 
 /**

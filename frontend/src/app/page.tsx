@@ -14,7 +14,7 @@ import {
   getExplorerAddressUrl,
 } from '../config/contract';
 
-type AppView = 'home' | 'bounties' | 'create';
+type AppView = 'home' | 'bounties' | 'create' | 'payment-activity';
 
 function FlowStep({
   number,
@@ -61,6 +61,11 @@ export default function Home() {
       if (typeof window !== 'undefined') {
         window.location.hash = 'create';
       }
+    } else if (view === 'payment-activity') {
+      setActiveNav('dashboard');
+      if (typeof window !== 'undefined') {
+        window.location.hash = 'payment-activity';
+      }
     } else {
       setActiveNav('bounties');
       if (typeof window !== 'undefined') {
@@ -91,21 +96,7 @@ export default function Home() {
   };
 
   const scrollToStats = () => {
-    setActiveNav('dashboard');
-    if (currentView !== 'home') {
-      setCurrentView('home');
-      if (typeof window !== 'undefined') {
-        window.location.hash = 'stats';
-        setTimeout(() => {
-          document.getElementById('stats')?.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
-      }
-    } else {
-      if (typeof window !== 'undefined') {
-        window.location.hash = 'stats';
-        document.getElementById('stats')?.scrollIntoView({ behavior: 'smooth' });
-      }
-    }
+    navigateTo('payment-activity');
   };
 
   useEffect(() => {
@@ -122,6 +113,9 @@ export default function Home() {
       } else if (hash === 'create') {
         setCurrentView('create');
         setMyBountiesFilter(false);
+      } else if (hash === 'payment-activity' || hash === 'dashboard') {
+        setCurrentView('payment-activity');
+        setActiveNav('dashboard');
       } else if (hash === 'how') {
         setCurrentView('home');
         setActiveNav('how');
@@ -129,11 +123,8 @@ export default function Home() {
           document.getElementById('how')?.scrollIntoView({ behavior: 'smooth' });
         }, 100);
       } else if (hash === 'stats') {
-        setCurrentView('home');
+        setCurrentView('payment-activity');
         setActiveNav('dashboard');
-        setTimeout(() => {
-          document.getElementById('stats')?.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
       } else {
         setCurrentView('home');
       }
@@ -204,12 +195,12 @@ export default function Home() {
               <span>My Bounties</span>
             </button>
             <button
-              className={`${styles.navLink} ${activeNav === 'dashboard' && currentView === 'home' ? styles.activeNavLink : ''}`}
+              className={`${styles.navLink} ${activeNav === 'dashboard' || currentView === 'payment-activity' ? styles.activeNavLink : ''}`}
               onClick={scrollToStats}
               id="nav-dashboard-btn"
             >
               <Icon name="dashboard" size={14} />
-              <span>Dashboard</span>
+              <span>Payment Activity</span>
             </button>
           </nav>
 
@@ -498,6 +489,20 @@ export default function Home() {
             <ContractInspector
               viewMode="create"
               onNavigateHome={() => navigateTo('home')}
+              onNavigateExplore={() => navigateTo('bounties', false)}
+            />
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* 4. DEDICATED PAYMENT ACTIVITY & FINANCIAL OVERVIEW VIEW           */}
+        {/* ================================================================= */}
+        {currentView === 'payment-activity' && (
+          <div className={styles.sectionInner}>
+            <ContractInspector
+              viewMode="payment-activity"
+              onNavigateHome={() => navigateTo('home')}
+              onNavigateCreate={() => navigateTo('create', false)}
               onNavigateExplore={() => navigateTo('bounties', false)}
             />
           </div>

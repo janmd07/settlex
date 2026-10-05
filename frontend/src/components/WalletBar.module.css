@@ -24,6 +24,31 @@
   font-family: inherit;
 }
 
+.activityBtn {
+  height: 34px;
+  border: 1px solid rgba(130, 103, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(101, 66, 230, 0.16);
+  color: #c4b5fd;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.activityBtn:hover {
+  background: rgba(101, 66, 230, 0.28);
+  border-color: rgba(167, 139, 250, 0.5);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
 /* Network Badge */
 .network {
   padding: 0 9px;

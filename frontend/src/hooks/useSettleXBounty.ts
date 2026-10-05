@@ -7,7 +7,11 @@ import {
   FormattedBounty,
   FormattedSubmission,
   BountyRole,
+  BountyState,
   TransactionState,
+  PaymentActivityItem,
+  PaymentSummary,
+  SettlementTxDetails,
   fetchBounty,
   fetchBountySubmissions,
   fetchNextBountyId,
@@ -15,6 +19,11 @@ import {
   fetchUserBounties,
   fetchClaimableReward,
   fetchHasSubmitted,
+  fetchSettlementTxHash,
+  fetchWalletPaymentSummary,
+  fetchWalletPaymentActivity,
+  recordSettlementTx,
+  getCachedSettlementTx,
   createBounty,
   submitBountyWork,
   closeBountySubmissions,
@@ -42,6 +51,11 @@ export function useSettleXBounty() {
   const [nextBountyId, setNextBountyId] = useState<number | null>(null);
   const [claimableReward, setClaimableReward] = useState<bigint>(BigInt(0));
   const [userHasSubmitted, setUserHasSubmitted] = useState<boolean>(false);
+  const [activeSettlementTx, setActiveSettlementTx] = useState<SettlementTxDetails | null>(null);
+  const [isLoadingSettlementTx, setIsLoadingSettlementTx] = useState<boolean>(false);
+  const [paymentSummary, setPaymentSummary] = useState<PaymentSummary | null>(null);
+  const [paymentActivity, setPaymentActivity] = useState<PaymentActivityItem[]>([]);
+  const [isLoadingPayments, setIsLoadingPayments] = useState<boolean>(false);
 
   // Role detection for the active connected wallet
   const userAddressLower = wallet.account?.toLowerCase();
@@ -80,11 +94,22 @@ export function useSettleXBounty() {
           setClaimableReward(claimable);
         }
 
+        if (bounty.state === BountyState.Settled || bounty.state === BountyState.Refunded) {
+          setIsLoadingSettlementTx(true);
+          fetchSettlementTxHash(bounty.bountyId, bounty.state, bounty.settledAtTimestamp)
+            .then((tx) => setActiveSettlementTx(tx))
+            .catch((err) => console.warn('Failed to resolve settlement tx:', err))
+            .finally(() => setIsLoadingSettlementTx(false));
+        } else {
+          setActiveSettlementTx(null);
+        }
+
         return bounty;
       } catch (err) {
         console.error('Failed to load bounty:', err);
         setActiveBounty(null);
         setSubmissions([]);
+        setActiveSettlementTx(null);
         throw err;
       } finally {
         setIsLoadingBounty(false);
@@ -92,6 +117,51 @@ export function useSettleXBounty() {
     },
     [wallet.account]
   );
+
+  // Read: Resolve settlement transaction for a bounty
+  const resolveBountySettlementTx = useCallback(
+    async (bountyId: number, state?: BountyState, settledAt?: number) => {
+      setIsLoadingSettlementTx(true);
+      try {
+        const details = await fetchSettlementTxHash(bountyId, state, settledAt);
+        if (activeBounty && activeBounty.bountyId === bountyId) {
+          setActiveSettlementTx(details);
+        }
+        return details;
+      } catch (err) {
+        console.warn(`Failed to resolve settlement tx for bounty #${bountyId}:`, err);
+        return null;
+      } finally {
+        setIsLoadingSettlementTx(false);
+      }
+    },
+    [activeBounty]
+  );
+
+  // Read: Load user payment summary and activity ledger
+  const loadPaymentData = useCallback(async () => {
+    if (!wallet.account) {
+      setPaymentSummary(null);
+      setPaymentActivity([]);
+      return { summary: null, activity: [] };
+    }
+    setIsLoadingPayments(true);
+    try {
+      const userAddr = wallet.account as `0x${string}`;
+      const [summary, activity] = await Promise.all([
+        fetchWalletPaymentSummary(userAddr),
+        fetchWalletPaymentActivity(userAddr),
+      ]);
+      setPaymentSummary(summary);
+      setPaymentActivity(activity);
+      return { summary, activity };
+    } catch (err) {
+      console.error('Failed to load wallet payment data:', err);
+      return { summary: null, activity: [] };
+    } finally {
+      setIsLoadingPayments(false);
+    }
+  }, [wallet.account]);
 
   // Read: Refresh nextBountyId
   const refreshNextBountyId = useCallback(async () => {
@@ -224,9 +294,24 @@ export function useSettleXBounty() {
     bountyId: number,
     winnerSubmissionId: number
   ): Promise<WriteTxResult> => {
-    return executeGuardedWrite('Select Winner', (onPending) =>
+    const res = await executeGuardedWrite('Select Winner', (onPending) =>
       selectBountyWinner(bountyId, winnerSubmissionId, onPending)
     );
+    if (res.success && res.hash) {
+      const winnerSub = submissions.find((s) => s.submissionId === winnerSubmissionId);
+      const details: SettlementTxDetails = {
+        bountyId,
+        txHash: res.hash,
+        blockNumber: res.receipt?.blockNumber || 0n,
+        explorerUrl: getExplorerTxUrl(res.hash),
+        timestamp: Math.floor(Date.now() / 1000),
+        eventType: 'WinnerSelected',
+        winnerAddress: winnerSub?.contributor,
+      };
+      recordSettlementTx(details);
+      setActiveSettlementTx(details);
+    }
+    return res;
   };
 
   const handleEscalateToDispute = async (bountyId: number): Promise<WriteTxResult> => {
@@ -239,15 +324,43 @@ export function useSettleXBounty() {
     bountyId: number,
     winnerSubmissionId: number
   ): Promise<WriteTxResult> => {
-    return executeGuardedWrite('Resolve Dispute', (onPending) =>
+    const res = await executeGuardedWrite('Resolve Dispute', (onPending) =>
       resolveBountyDispute(bountyId, winnerSubmissionId, onPending)
     );
+    if (res.success && res.hash) {
+      const winnerSub = submissions.find((s) => s.submissionId === winnerSubmissionId);
+      const details: SettlementTxDetails = {
+        bountyId,
+        txHash: res.hash,
+        blockNumber: res.receipt?.blockNumber || 0n,
+        explorerUrl: getExplorerTxUrl(res.hash),
+        timestamp: Math.floor(Date.now() / 1000),
+        eventType: 'DisputeResolved',
+        winnerAddress: winnerSub?.contributor,
+      };
+      recordSettlementTx(details);
+      setActiveSettlementTx(details);
+    }
+    return res;
   };
 
   const handleClaimRefund = async (bountyId: number): Promise<WriteTxResult> => {
-    return executeGuardedWrite('Claim Expired Refund', (onPending) =>
+    const res = await executeGuardedWrite('Claim Expired Refund', (onPending) =>
       claimExpiredBountyRefund(bountyId, onPending)
     );
+    if (res.success && res.hash) {
+      const details: SettlementTxDetails = {
+        bountyId,
+        txHash: res.hash,
+        blockNumber: res.receipt?.blockNumber || 0n,
+        explorerUrl: getExplorerTxUrl(res.hash),
+        timestamp: Math.floor(Date.now() / 1000),
+        eventType: 'BountyRefunded',
+      };
+      recordSettlementTx(details);
+      setActiveSettlementTx(details);
+    }
+    return res;
   };
 
   const handleClaimReward = async (): Promise<WriteTxResult> => {
@@ -290,6 +403,13 @@ export function useSettleXBounty() {
     isArbiter: isDisputeResolver,
     userHasSubmitted,
     claimableReward,
+    activeSettlementTx,
+    isLoadingSettlementTx,
+    paymentSummary,
+    paymentActivity,
+    isLoadingPayments,
+    loadPaymentData,
+    resolveBountySettlementTx,
     loadBounty,
     loadAllBounties,
     refreshNextBountyId,

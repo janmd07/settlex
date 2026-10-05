@@ -2437,4 +2437,795 @@
   }
 }
 
+/* ==========================================================================
+   SettleX V2: Settlement & Refund Verification Cards
+   ========================================================================== */
+
+.settlementVerificationCard {
+  margin-top: 24px;
+  background: linear-gradient(135deg, rgba(16, 36, 28, 0.95), rgba(12, 17, 34, 0.96));
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), 0 0 20px rgba(52, 211, 153, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.settlementVerificationCard::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7);
+}
+
+.refundVerificationCard {
+  margin-top: 24px;
+  background: linear-gradient(135deg, rgba(38, 28, 12, 0.95), rgba(12, 17, 34, 0.96));
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), 0 0 20px rgba(245, 158, 11, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.refundVerificationCard::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #d97706, #f59e0b, #fbbf24);
+}
+
+.settlementCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.settlementBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  border-radius: 20px;
+  color: #34d399;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.settlementDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.refundBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 20px;
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.refundDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+}
+
+.settlementTimestamp {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: inherit;
+}
+
+.settlementGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.settlementField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: rgba(10, 14, 28, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+}
+
+.settlementFieldLabel {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.settlementFieldValueMono {
+  font-size: 13px;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  word-break: break-all;
+}
+
+.settlementTxLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #60a5fa;
+  text-decoration: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  word-break: break-all;
+}
+
+.settlementTxLink:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.settlementAmountGreen {
+  font-size: 15px;
+  font-weight: 700;
+  color: #34d399;
+}
+
+.settlementAmountPurple {
+  font-size: 15px;
+  font-weight: 700;
+  color: #a78bfa;
+}
+
+.refundAmountGold {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.payoutPercent {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.settlementReason {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.resolvingTx {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #a78bfa;
+}
+
+.pendingTxText {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* ==========================================================================
+   SettleX V2: Payment Activity View Styles
+   ========================================================================== */
+
+.paymentPageContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.paymentPageHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.paymentTitleArea {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.paymentPageTitle {
+  font-size: clamp(24px, 2.5vw, 32px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  margin: 0;
+}
+
+.paymentPageSubtitle {
+  font-size: 14px;
+  color: #94a3b8;
+  max-width: 680px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Wallet prompt when disconnected */
+.walletPromptCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 60px 24px;
+  background: linear-gradient(135deg, rgba(17, 24, 48, 0.8), rgba(12, 16, 33, 0.8));
+  border: 1px dashed rgba(139, 92, 246, 0.3);
+  border-radius: 16px;
+  gap: 16px;
+}
+
+.walletPromptIcon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(124, 58, 237, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  display: grid;
+  place-items: center;
+  color: #c4b5fd;
+}
+
+.walletPromptTitle {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+}
+
+.walletPromptText {
+  font-size: 14px;
+  color: #94a3b8;
+  max-width: 480px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Financial Overview Grid */
+.financialOverviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.financialCard {
+  background: linear-gradient(100deg, rgba(16, 21, 42, 0.94), rgba(12, 15, 32, 0.9));
+  border: 1px solid rgba(131, 142, 190, 0.2);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.financialCardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.financialRoleBadgeCreator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(129, 140, 248, 0.3);
+  border-radius: 20px;
+  color: #a5b4fc;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.financialRoleBadgeContributor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  border-radius: 20px;
+  color: #6ee7b7;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.financialCardNote {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.financialMetricsList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.financialMetricRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(9, 12, 25, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+}
+
+.metricLabel {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.metricValue {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f1f5f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.metricValueGreen {
+  font-size: 16px;
+  font-weight: 700;
+  color: #34d399;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.metricValueGreenHighlight {
+  font-size: 18px;
+  font-weight: 800;
+  color: #10b981;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.metricValueGold {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fbbf24;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.metricValuePurple {
+  font-size: 16px;
+  font-weight: 700;
+  color: #c084fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.claimableCallout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 10px;
+  margin-top: 4px;
+}
+
+.claimableText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #fde68a;
+}
+
+.claimableText strong {
+  font-size: 14px;
+  color: #ffffff;
+}
+
+.buttonClaimSmall {
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #d97706, #f59e0b);
+  color: #ffffff;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.buttonClaimSmall:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+/* Payment History Section */
+.historySection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.historySectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.historyTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.historyTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+}
+
+.historyCount {
+  font-size: 12px;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 3px 8px;
+  border-radius: 12px;
+}
+
+.filterPills {
+  display: flex;
+  gap: 6px;
+  background: rgba(14, 18, 38, 0.6);
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.filterPill {
+  padding: 6px 14px;
+  border-radius: 7px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filterPill:hover {
+  color: #ffffff;
+}
+
+.filterPillActive {
+  background: rgba(99, 102, 241, 0.25);
+  color: #ffffff;
+  border: 1px solid rgba(129, 140, 248, 0.4);
+}
+
+.activityList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.activityCard {
+  background: linear-gradient(100deg, rgba(16, 20, 39, 0.92), rgba(12, 15, 30, 0.88));
+  border: 1px solid rgba(131, 142, 190, 0.16);
+  border-radius: 14px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.activityCard:hover {
+  border-color: rgba(139, 92, 246, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+}
+
+.activityCardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.activityTypeBadgeGroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.directionBadgeIncoming {
+  font-size: 11px;
+  font-weight: 800;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.03em;
+}
+
+.directionBadgeOutgoing {
+  font-size: 11px;
+  font-weight: 800;
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.03em;
+}
+
+.activityTypeLabel {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.activityAmountGroup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.activityAmountIncoming {
+  font-size: 17px;
+  font-weight: 800;
+  color: #34d399;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.activityAmountOutgoing {
+  font-size: 17px;
+  font-weight: 800;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.statusConfirmedBadge {
+  font-size: 11px;
+  color: #10b981;
+  font-weight: 600;
+}
+
+.activityCardMiddle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bountyRefLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #a5b4fc;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.2s ease;
+}
+
+.bountyRefLink:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+.activityNotes {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.activityCardBottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.activityCounterparty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.counterpartyLabel {
+  color: #64748b;
+}
+
+.counterpartyAddress {
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.activityTxGroup {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.txHashRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(14, 19, 39, 0.7);
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+
+.txLabel {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.txLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #60a5fa;
+  text-decoration: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  transition: color 0.2s ease;
+}
+
+.txLink:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.copyTxBtn {
+  background: transparent;
+  border: none;
+  padding: 2px;
+  color: #94a3b8;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.copyTxBtn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.resolvingTxSmall {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #a78bfa;
+}
+
+.activityDate {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.emptyActivityCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 56px 20px;
+  background: rgba(15, 18, 37, 0.6);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  gap: 12px;
+}
+
+.emptyActivityCard h4 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+}
+
+.emptyActivityCard p {
+  font-size: 14px;
+  color: #8d96b0;
+  max-width: 440px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.emptyActions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+/* Responsive overrides */
+@media (max-width: 768px) {
+  .financialOverviewGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .activityCardTop {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .activityCardBottom {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .settlementGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .financialCard {
+    padding: 16px;
+  }
+
+  .activityCard {
+    padding: 14px;
+  }
+
+  .emptyActions {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .emptyActions button {
+    width: 100%;
+  }
+
+  .filterPills {
+    width: 100%;
+    overflow-x: auto;
+  }
+}
+
 

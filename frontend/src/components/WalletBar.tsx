@@ -47,7 +47,7 @@ export function WalletBar() {
         <b className={styles.protectedTag}>PROTECTED</b>
       </div>
 
-      {/* When Connected: Balance, Address, Copy, Disconnect */}
+      {/* When Connected: Balance, Address, Copy, Activity, Disconnect */}
       {isConnected ? (
         <>
           {balanceMon !== null && (
@@ -56,6 +56,16 @@ export function WalletBar() {
               <span>{balanceMon} MON</span>
             </div>
           )}
+
+          <a
+            href="#payment-activity"
+            className={styles.activityBtn}
+            id="wallet-payment-activity-btn"
+            title="View Onchain Payment Activity & Settlement History"
+          >
+            <Icon name="coins" size={13} />
+            <span>Payment Activity</span>
+          </a>
 
           {truncatedAddress && (
             <button

@@ -11,6 +11,7 @@ import {
   getExplorerAddressUrl,
 } from '../config/contract';
 import { BountyState } from '../contracts/types';
+import { getCachedSettlementTx } from '../contracts/reads';
 import { Icon } from './Icons';
 import styles from './ContractInspector.module.css';
 
@@ -21,7 +22,7 @@ type SortOption = 'reward-desc' | 'reward-asc' | 'newest' | 'deadline' | 'capaci
 const PAGE_SIZE = 10;
 
 export interface ContractInspectorProps {
-  viewMode?: 'home-stats' | 'bounties' | 'create' | 'all';
+  viewMode?: 'home-stats' | 'bounties' | 'create' | 'all' | 'payment-activity';
   externalTab?: ActiveTab;
   onTabChange?: (tab: ActiveTab) => void;
   myBountiesOnly?: boolean;
@@ -54,6 +55,13 @@ export function ContractInspector({
     isArbiter,
     userHasSubmitted,
     claimableReward,
+    activeSettlementTx,
+    isLoadingSettlementTx,
+    paymentSummary,
+    paymentActivity,
+    isLoadingPayments,
+    loadPaymentData,
+    resolveBountySettlementTx,
     loadBounty,
     loadAllBounties,
     refreshNextBountyId,
@@ -78,6 +86,23 @@ export function ContractInspector({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [lookupBountyId, setLookupBountyId] = useState<string>('');
   const [readError, setReadError] = useState<string | null>(null);
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'incoming' | 'outgoing'>('all');
+  const [copiedTxHash, setCopiedTxHash] = useState<string | null>(null);
+
+  const handleCopyTx = (txHash: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (navigator?.clipboard) {
+      navigator.clipboard.writeText(txHash);
+      setCopiedTxHash(txHash);
+      setTimeout(() => setCopiedTxHash(null), 2000);
+    }
+  };
+
+  useEffect(() => {
+    if (viewMode === 'payment-activity' && wallet.account) {
+      loadPaymentData();
+    }
+  }, [viewMode, wallet.account, loadPaymentData]);
 
   // Reset pagination to Page 1 when search query, sort option, or view changes
   useEffect(() => {
@@ -547,6 +572,346 @@ export function ContractInspector({
       </div>
     </div>
   );
+
+  // Filtered payment activity memo
+  const filteredActivity = useMemo(() => {
+    if (paymentFilter === 'incoming') {
+      return paymentActivity.filter((p) => p.direction === 'INCOMING');
+    }
+    if (paymentFilter === 'outgoing') {
+      return paymentActivity.filter((p) => p.direction === 'OUTGOING');
+    }
+    return paymentActivity;
+  }, [paymentActivity, paymentFilter]);
+
+  // Dedicated Payment Activity View Mode
+  if (viewMode === 'payment-activity') {
+    return (
+      <div className={styles.container}>
+        {txNotificationElement}
+        <div className={styles.paymentPageContainer}>
+          {/* Header */}
+          <div className={styles.paymentPageHeader}>
+            <div className={styles.exploreBreadcrumb}>
+              <button
+                type="button"
+                className={styles.backButton}
+                onClick={onNavigateHome}
+                id="payment-back-home-btn"
+              >
+                <span className={styles.backArrowIcon}>&larr;</span>
+                <span>Back to Home</span>
+              </button>
+              <div className={styles.exploreNetworkBadge}>
+                <span className={styles.badgePulseDot} />
+                <span>Monad Testnet</span>
+              </div>
+            </div>
+
+            <div className={styles.paymentTitleArea}>
+              <div className={styles.createEyebrow}>
+                <span className={styles.eyebrowStar}>✦</span> ONCHAIN FINANCIAL LEDGER
+              </div>
+              <h2 className={styles.paymentPageTitle}>Payment Activity & Settlement History</h2>
+              <p className={styles.paymentPageSubtitle}>
+                Real-time verified onchain settlements, creator funding deposits, winner rewards, and participation disbursements on Monad.
+              </p>
+            </div>
+          </div>
+
+          {!wallet.isConnected ? (
+            <div className={styles.walletPromptCard}>
+              <div className={styles.walletPromptIcon}>
+                <Icon name="wallet" size={32} />
+              </div>
+              <h3 className={styles.walletPromptTitle}>Connect Wallet to View Payment Activity</h3>
+              <p className={styles.walletPromptText}>
+                Connect your EVM wallet on Monad Testnet to view your creator funding, earned rewards, and real onchain settlement transactions.
+              </p>
+              <button
+                className={styles.buttonPrimary}
+                onClick={wallet.connectWallet}
+                id="payment-connect-wallet-btn"
+              >
+                <Icon name="wallet" size={16} />
+                <span>Connect Wallet</span>
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Financial Overview Cards */}
+              <div className={styles.financialOverviewGrid}>
+                {/* CREATOR FINANCIAL OVERVIEW */}
+                <div className={styles.financialCard}>
+                  <div className={styles.financialCardTop}>
+                    <div className={styles.financialRoleBadgeCreator}>
+                      <Icon name="file" size={13} />
+                      <span>CREATOR FINANCIALS</span>
+                    </div>
+                    <span className={styles.financialCardNote}>Outbound & Refunds</span>
+                  </div>
+
+                  <div className={styles.financialMetricsList}>
+                    <div className={styles.financialMetricRow}>
+                      <span className={styles.metricLabel}>Total Escrow Funded</span>
+                      <span className={styles.metricValue}>
+                        {paymentSummary?.creator.totalFundedMon ?? '0.00'} MON
+                      </span>
+                    </div>
+
+                    <div className={styles.financialMetricRow}>
+                      <span className={styles.metricLabel}>Total Paid to Contributors</span>
+                      <span className={styles.metricValueGreen}>
+                        {paymentSummary?.creator.totalPaidMon ?? '0.00'} MON
+                      </span>
+                    </div>
+
+                    <div className={styles.financialMetricRow}>
+                      <span className={styles.metricLabel}>Total Refunded to Creator</span>
+                      <span className={styles.metricValueGold}>
+                        {paymentSummary?.creator.totalRefundedMon ?? '0.00'} MON
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* CONTRIBUTOR FINANCIAL OVERVIEW */}
+                <div className={styles.financialCard}>
+                  <div className={styles.financialCardTop}>
+                    <div className={styles.financialRoleBadgeContributor}>
+                      <Icon name="coins" size={13} />
+                      <span>CONTRIBUTOR EARNINGS</span>
+                    </div>
+                    <span className={styles.financialCardNote}>Verified Inbound</span>
+                  </div>
+
+                  <div className={styles.financialMetricsList}>
+                    <div className={styles.financialMetricRow}>
+                      <span className={styles.metricLabel}>Total Earned</span>
+                      <span className={styles.metricValueGreenHighlight}>
+                        {paymentSummary?.contributor.totalEarnedMon ?? '0.00'} MON
+                      </span>
+                    </div>
+
+                    <div className={styles.financialMetricRow}>
+                      <span className={styles.metricLabel}>Winner Rewards (80% + dust)</span>
+                      <span className={styles.metricValueGreen}>
+                        {paymentSummary?.contributor.winnerRewardsMon ?? '0.00'} MON
+                      </span>
+                    </div>
+
+                    <div className={styles.financialMetricRow}>
+                      <span className={styles.metricLabel}>Participation Rewards (20% pool)</span>
+                      <span className={styles.metricValuePurple}>
+                        {paymentSummary?.contributor.participationRewardsMon ?? '0.00'} MON
+                      </span>
+                    </div>
+
+                    {paymentSummary && BigInt(paymentSummary.contributor.pendingClaimableWei) > 0n && (
+                      <div className={styles.claimableCallout}>
+                        <div className={styles.claimableText}>
+                          <span>Pending Fallback Pull Reward:</span>
+                          <strong>{paymentSummary.contributor.pendingClaimableMon} MON</strong>
+                        </div>
+                        <button
+                          className={styles.buttonClaimSmall}
+                          onClick={handleClaimReward}
+                        >
+                          Withdraw
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment History Section */}
+              <div className={styles.historySection}>
+                <div className={styles.historySectionHeader}>
+                  <div className={styles.historyTitleGroup}>
+                    <h3 className={styles.historyTitle}>Payment History & Settlement Transactions</h3>
+                    <span className={styles.historyCount}>
+                      {filteredActivity.length} {filteredActivity.length === 1 ? 'Record' : 'Records'}
+                    </span>
+                  </div>
+
+                  {/* Filter Pills */}
+                  <div className={styles.filterPills}>
+                    <button
+                      className={`${styles.filterPill} ${paymentFilter === 'all' ? styles.filterPillActive : ''}`}
+                      onClick={() => setPaymentFilter('all')}
+                    >
+                      All ({paymentActivity.length})
+                    </button>
+                    <button
+                      className={`${styles.filterPill} ${paymentFilter === 'incoming' ? styles.filterPillActive : ''}`}
+                      onClick={() => setPaymentFilter('incoming')}
+                    >
+                      Incoming ({paymentActivity.filter((p) => p.direction === 'INCOMING').length})
+                    </button>
+                    <button
+                      className={`${styles.filterPill} ${paymentFilter === 'outgoing' ? styles.filterPillActive : ''}`}
+                      onClick={() => setPaymentFilter('outgoing')}
+                    >
+                      Outgoing ({paymentActivity.filter((p) => p.direction === 'OUTGOING').length})
+                    </button>
+                  </div>
+                </div>
+
+                {isLoadingPayments ? (
+                  <div className={styles.loadingBox}>
+                    <div className={styles.loadingSpinner} />
+                    <p>Loading onchain payment activity from Monad Testnet...</p>
+                  </div>
+                ) : filteredActivity.length === 0 ? (
+                  <div className={styles.emptyActivityCard}>
+                    <div className={styles.emptyIcon}>
+                      <Icon name="coins" size={36} />
+                    </div>
+                    <h4>No Payment Activity Found</h4>
+                    <p>
+                      You haven&apos;t created or contributed to any settled bounties with this wallet yet.
+                    </p>
+                    <div className={styles.emptyActions}>
+                      <button
+                        className={styles.buttonPrimary}
+                        onClick={onNavigateExplore}
+                      >
+                        Explore Bounties
+                      </button>
+                      <button
+                        className={styles.buttonSecondary}
+                        onClick={onNavigateCreate}
+                      >
+                        Create a Bounty
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={styles.activityList}>
+                    {filteredActivity.map((item) => {
+                      const isIncoming = item.direction === 'INCOMING';
+                      const txHash = item.txHash || getCachedSettlementTx(item.bountyId)?.txHash;
+                      const explorerUrl = item.explorerUrl || (txHash ? getExplorerTxUrl(txHash) : undefined);
+
+                      return (
+                        <div key={item.id} className={styles.activityCard}>
+                          <div className={styles.activityCardTop}>
+                            <div className={styles.activityTypeBadgeGroup}>
+                              <span
+                                className={
+                                  isIncoming
+                                    ? styles.directionBadgeIncoming
+                                    : styles.directionBadgeOutgoing
+                                }
+                              >
+                                {isIncoming ? '↓ INCOMING' : '↑ OUTGOING'}
+                              </span>
+                              <span className={styles.activityTypeLabel}>{item.typeLabel}</span>
+                            </div>
+
+                            <div className={styles.activityAmountGroup}>
+                              <span
+                                className={
+                                  isIncoming
+                                    ? styles.activityAmountIncoming
+                                    : styles.activityAmountOutgoing
+                                }
+                              >
+                                {isIncoming ? '+' : '-'}{item.amountMon} MON
+                              </span>
+                              <span className={styles.statusConfirmedBadge}>
+                                ✓ {item.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className={styles.activityCardMiddle}>
+                            {item.bountyId > 0 && (
+                              <button
+                                className={styles.bountyRefLink}
+                                onClick={() => {
+                                  setSelectedBountyId(item.bountyId);
+                                  loadBounty(item.bountyId);
+                                  if (onNavigateExplore) onNavigateExplore();
+                                }}
+                                title="Click to inspect this bounty in detail"
+                              >
+                                <Icon name="file" size={12} />
+                                <span>
+                                  Bounty #{item.bountyId}: {item.bountyTitle || 'Work Deliverable'}
+                                </span>
+                              </button>
+                            )}
+
+                            {item.notes && (
+                              <p className={styles.activityNotes}>{item.notes}</p>
+                            )}
+                          </div>
+
+                          <div className={styles.activityCardBottom}>
+                            <div className={styles.activityCounterparty}>
+                              <span className={styles.counterpartyLabel}>
+                                {item.counterpartyRole ? `${item.counterpartyRole}: ` : 'Counterparty: '}
+                              </span>
+                              <span className={styles.counterpartyAddress}>
+                                {item.counterparty
+                                  ? `${item.counterparty.slice(0, 8)}...${item.counterparty.slice(-6)}`
+                                  : 'Monad Protocol'}
+                              </span>
+                            </div>
+
+                            <div className={styles.activityTxGroup}>
+                              {txHash ? (
+                                <div className={styles.txHashRow}>
+                                  <span className={styles.txLabel}>TX:</span>
+                                  <a
+                                    href={explorerUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={styles.txLink}
+                                    title={`View on Monadscan: ${txHash}`}
+                                  >
+                                    <span className={styles.txHashText}>
+                                      {txHash.slice(0, 8)}...{txHash.slice(-6)}
+                                    </span>
+                                    <Icon name="external" size={11} />
+                                  </a>
+                                  <button
+                                    type="button"
+                                    className={styles.copyTxBtn}
+                                    onClick={(e) => handleCopyTx(txHash, e)}
+                                    title="Copy transaction hash"
+                                  >
+                                    <Icon
+                                      name={copiedTxHash === txHash ? 'check-copy' : 'copy'}
+                                      size={11}
+                                    />
+                                  </button>
+                                </div>
+                              ) : item.bountyId > 0 ? (
+                                <span className={styles.resolvingTxSmall}>
+                                  <span className={styles.buttonSpinner} /> Resolving TX...
+                                </span>
+                              ) : null}
+
+                              <span className={styles.activityDate}>
+                                {item.dateFormatted}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // If viewMode is 'home-stats', only render the live protocol statistics strip
   if (viewMode === 'home-stats') {
@@ -1289,6 +1654,165 @@ export function ContractInspector({
                         </div>
                       )}
                     </div>
+
+                    {/* Settlement Onchain Verification Card */}
+                    {activeBounty.state === BountyState.Settled && (
+                      <div className={styles.settlementVerificationCard}>
+                        <div className={styles.settlementCardHeader}>
+                          <div className={styles.settlementBadge}>
+                            <span className={styles.settlementDot} />
+                            <span>✓ Settled Onchain</span>
+                          </div>
+                          <span className={styles.settlementTimestamp}>
+                            Settled: {activeBounty.settledAtDate || 'Onchain'}
+                          </span>
+                        </div>
+
+                        <div className={styles.settlementGrid}>
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Settlement Transaction</span>
+                            {activeSettlementTx ? (
+                              <div className={styles.txHashRow}>
+                                <a
+                                  href={activeSettlementTx.explorerUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={styles.settlementTxLink}
+                                  title={`View settlement tx on Monad Explorer: ${activeSettlementTx.txHash}`}
+                                >
+                                  <span className={styles.settlementFieldValueMono}>
+                                    {activeSettlementTx.txHash.slice(0, 8)}...{activeSettlementTx.txHash.slice(-6)}
+                                  </span>
+                                  <Icon name="external" size={12} />
+                                </a>
+                                <button
+                                  type="button"
+                                  className={styles.copyTxBtn}
+                                  onClick={(e) => handleCopyTx(activeSettlementTx.txHash, e)}
+                                  title="Copy transaction hash"
+                                >
+                                  <Icon
+                                    name={copiedTxHash === activeSettlementTx.txHash ? 'check-copy' : 'copy'}
+                                    size={12}
+                                  />
+                                </button>
+                              </div>
+                            ) : isLoadingSettlementTx ? (
+                              <span className={styles.resolvingTx}>
+                                <span className={styles.buttonSpinner} /> Resolving transaction...
+                              </span>
+                            ) : (
+                              <span className={styles.pendingTxText}>Block confirmed onchain</span>
+                            )}
+                          </div>
+
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Winning Contributor</span>
+                            <span className={styles.settlementFieldValueMono}>
+                              {activeSettlementTx?.winnerAddress
+                                ? `${activeSettlementTx.winnerAddress.slice(0, 8)}...${activeSettlementTx.winnerAddress.slice(-6)}`
+                                : activeBounty.winnerAddress
+                                ? `${activeBounty.winnerAddress.slice(0, 8)}...${activeBounty.winnerAddress.slice(-6)}`
+                                : `Submission #${activeBounty.winnerSubmissionId}`}
+                            </span>
+                          </div>
+
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Winner Payout</span>
+                            <span className={styles.settlementAmountGreen}>
+                              {activeBounty.winnerMon} MON <span className={styles.payoutPercent}>(80%)</span>
+                            </span>
+                          </div>
+
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Participation Pool</span>
+                            <span className={styles.settlementAmountPurple}>
+                              {activeBounty.participationPoolMon} MON
+                              <span className={styles.payoutPercent}>
+                                {activeBounty.submissionCount === 1
+                                  ? ' (Refunded to Creator)'
+                                  : ` (${activeBounty.submissionCount - 1} Contributors)`}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Refund Onchain Verification Card */}
+                    {activeBounty.state === BountyState.Refunded && (
+                      <div className={styles.refundVerificationCard}>
+                        <div className={styles.settlementCardHeader}>
+                          <div className={styles.refundBadge}>
+                            <span className={styles.refundDot} />
+                            <span>✓ Refunded Onchain</span>
+                          </div>
+                          <span className={styles.settlementTimestamp}>
+                            Refunded: {activeBounty.settledAtDate || 'Onchain'}
+                          </span>
+                        </div>
+
+                        <div className={styles.settlementGrid}>
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Refund Transaction</span>
+                            {activeSettlementTx ? (
+                              <div className={styles.txHashRow}>
+                                <a
+                                  href={activeSettlementTx.explorerUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={styles.settlementTxLink}
+                                  title={`View refund tx on Monad Explorer: ${activeSettlementTx.txHash}`}
+                                >
+                                  <span className={styles.settlementFieldValueMono}>
+                                    {activeSettlementTx.txHash.slice(0, 8)}...{activeSettlementTx.txHash.slice(-6)}
+                                  </span>
+                                  <Icon name="external" size={12} />
+                                </a>
+                                <button
+                                  type="button"
+                                  className={styles.copyTxBtn}
+                                  onClick={(e) => handleCopyTx(activeSettlementTx.txHash, e)}
+                                  title="Copy transaction hash"
+                                >
+                                  <Icon
+                                    name={copiedTxHash === activeSettlementTx.txHash ? 'check-copy' : 'copy'}
+                                    size={12}
+                                  />
+                                </button>
+                              </div>
+                            ) : isLoadingSettlementTx ? (
+                              <span className={styles.resolvingTx}>
+                                <span className={styles.buttonSpinner} /> Resolving transaction...
+                              </span>
+                            ) : (
+                              <span className={styles.pendingTxText}>Block confirmed onchain</span>
+                            )}
+                          </div>
+
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Creator Recipient</span>
+                            <span className={styles.settlementFieldValueMono}>
+                              {activeBounty.creator.slice(0, 8)}...{activeBounty.creator.slice(-6)}
+                            </span>
+                          </div>
+
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Refund Amount</span>
+                            <span className={styles.refundAmountGold}>
+                              {activeBounty.rewardMon} MON <span className={styles.payoutPercent}>(100% Reclaimed)</span>
+                            </span>
+                          </div>
+
+                          <div className={styles.settlementField}>
+                            <span className={styles.settlementFieldLabel}>Reason</span>
+                            <span className={styles.settlementReason}>
+                              Submission deadline passed with 0 submissions
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className={styles.emptyCard}>

@@ -17,7 +17,8 @@ export type IconName =
   | 'cube'
   | 'code'
   | 'check'
-  | 'arrow';
+  | 'arrow'
+  | 'external';
 
 export function Icon({ name, size = 18, className }: { name: IconName; size?: number; className?: string }) {
   const common = {
@@ -153,6 +154,14 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
       return (
         <svg {...common}>
           <path d="M5 12h14M13 6l6 6-6 6" />
+        </svg>
+      );
+    case 'external':
+      return (
+        <svg {...common}>
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
         </svg>
       );
   }

@@ -1,5 +1,5 @@
-import { formatEther } from 'viem';
-import { SETTLEX_BOUNTY_ADDRESS, SETTLEX_ESCROW_ADDRESS } from '../config/contract';
+import { decodeEventLog, formatEther, pad, toHex } from 'viem';
+import { SETTLEX_BOUNTY_ADDRESS, SETTLEX_ESCROW_ADDRESS, getExplorerTxUrl } from '../config/contract';
 import { SETTLEX_ESCROW_ABI } from './abi';
 import { SETTLEX_BOUNTY_ABI } from './bountyAbi';
 import { publicClient } from './client';
@@ -12,6 +12,9 @@ import {
   FormattedBounty,
   FormattedDeal,
   FormattedSubmission,
+  PaymentActivityItem,
+  PaymentSummary,
+  SettlementTxDetails,
   RawBounty,
   RawDeal,
   RawSubmission,
@@ -385,5 +388,671 @@ export async function fetchAllBounties(): Promise<FormattedBounty[]> {
     console.error('Failed to fetch all bounties:', err);
     return [];
   }
+}
+
+/* ==========================================================================
+   SettleX V2: Payment Activity & Settlement Transaction Reads
+   ========================================================================== */
+
+/**
+ * In-memory cache for resolved onchain settlement transactions.
+ * Maps bountyId => SettlementTxDetails.
+ */
+const settlementTxCache = new Map<number, SettlementTxDetails>();
+
+/**
+ * Map tracking in-flight transaction hash resolution promises to prevent redundant duplicate RPC calls.
+ */
+const inFlightResolutions = new Map<number, Promise<SettlementTxDetails | null>>();
+
+/**
+ * Manually records or pre-caches a settlement transaction (e.g. immediately from in-session writes).
+ */
+export function recordSettlementTx(details: SettlementTxDetails): void {
+  settlementTxCache.set(details.bountyId, details);
+}
+
+/**
+ * Reads cached settlement transaction details if already resolved.
+ */
+export function getCachedSettlementTx(bountyId: number): SettlementTxDetails | undefined {
+  return settlementTxCache.get(bountyId);
+}
+
+/**
+ * Known deployment block for SettleXBounty contract on Monad Testnet (0x9e58...fF7).
+ */
+const SETTLEX_BOUNTY_DEPLOYMENT_BLOCK = 68129171n;
+
+/**
+ * Resolves the real on-chain settlement or refund transaction hash for a bounty.
+ *
+ * Algorithm:
+ * 1. Checks memory cache for instantaneous response.
+ * 2. Deduplicates concurrent calls via inFlightResolutions.
+ * 3. Inspects bounty state and `settledAt` block timestamp.
+ * 4. Uses an efficient binary search over block timestamps to locate the target block (~15 calls).
+ * 5. Queries logs across a narrow ±15 block window (30 blocks total, well below Monad's 100-block limit).
+ * 6. Decodes the event (WinnerSelected, DisputeResolved, BountyRefunded) and extracts `log.transactionHash`.
+ * 7. Caches and returns the real on-chain transaction details.
+ */
+export async function fetchSettlementTxHash(
+  bountyId: number | bigint,
+  bountyState?: BountyState,
+  settledAtTimestamp?: number
+): Promise<SettlementTxDetails | null> {
+  const numId = Number(bountyId);
+
+  // 1. Check in-memory cache
+  if (settlementTxCache.has(numId)) {
+    return settlementTxCache.get(numId)!;
+  }
+
+  // 2. Check if a resolution is already in-flight for this bounty
+  if (inFlightResolutions.has(numId)) {
+    return inFlightResolutions.get(numId)!;
+  }
+
+  const resolutionPromise = (async () => {
+    try {
+      let state = bountyState;
+      let settledAt = settledAtTimestamp;
+
+      // If state or timestamp was not passed, read bounty directly
+      if (state === undefined || settledAt === undefined) {
+        const bounty = await fetchBounty(numId);
+        state = bounty.state;
+        settledAt = bounty.settledAtTimestamp;
+      }
+
+      // Only settled or refunded bounties have a settlement transaction
+      if (state !== BountyState.Settled && state !== BountyState.Refunded) {
+        return null;
+      }
+
+      if (!settledAt || settledAt <= 0) {
+        return null;
+      }
+
+      const targetTimestamp = BigInt(settledAt);
+      const latestBlockNumber = await publicClient.getBlockNumber();
+
+      // Binary search over block timestamps to find the block containing targetTimestamp
+      let low = SETTLEX_BOUNTY_DEPLOYMENT_BLOCK;
+      let high = latestBlockNumber;
+      let candidateBlock = low;
+
+      while (low <= high) {
+        const mid = (low + high) / 2n;
+        const block = await publicClient.getBlock({ blockNumber: mid });
+
+        if (block.timestamp < targetTimestamp) {
+          low = mid + 1n;
+          candidateBlock = mid;
+        } else if (block.timestamp > targetTimestamp) {
+          high = mid - 1n;
+        } else {
+          candidateBlock = mid;
+          break;
+        }
+      }
+
+      // Narrow ±15 block window (30 blocks total, well within Monad Testnet's 100-block limit)
+      const fromBlock = candidateBlock > 15n ? candidateBlock - 15n : 0n;
+      const toBlock = candidateBlock + 15n > latestBlockNumber ? latestBlockNumber : candidateBlock + 15n;
+
+      const hexBountyId = pad(toHex(BigInt(numId)), { size: 32 });
+
+      const logs = await (publicClient.getLogs as any)({
+        address: SETTLEX_BOUNTY_ADDRESS,
+        topics: [null, hexBountyId],
+        fromBlock,
+        toBlock,
+      });
+
+      for (const log of logs) {
+        try {
+          const decoded = decodeEventLog({
+            abi: SETTLEX_BOUNTY_ABI,
+            data: log.data,
+            topics: log.topics,
+          });
+
+          if (
+            decoded.eventName === 'WinnerSelected' ||
+            decoded.eventName === 'DisputeResolved' ||
+            decoded.eventName === 'BountyRefunded'
+          ) {
+            const args = decoded.args as any;
+            const details: SettlementTxDetails = {
+              bountyId: numId,
+              txHash: log.transactionHash,
+              blockNumber: log.blockNumber,
+              explorerUrl: getExplorerTxUrl(log.transactionHash),
+              timestamp: settledAt,
+              eventType: decoded.eventName as any,
+              winnerAddress: args.winner,
+              winnerPayoutWei: args.winnerPayout,
+              participantPoolPayoutWei: args.participantPoolPayout,
+            };
+
+            settlementTxCache.set(numId, details);
+            return details;
+          }
+        } catch {
+          // Log not part of standard ABI or irrelevant event, continue
+        }
+      }
+
+      return null;
+    } catch (err) {
+      console.warn(`Failed to resolve settlement tx hash for Bounty #${numId}:`, err);
+      return null;
+    } finally {
+      inFlightResolutions.delete(numId);
+    }
+  })();
+
+  inFlightResolutions.set(numId, resolutionPromise);
+  return resolutionPromise;
+}
+
+/**
+ * Computes exact financial summary data for a connected wallet using on-chain Multicall reads.
+ */
+export async function fetchWalletPaymentSummary(userAddress: `0x${string}`): Promise<PaymentSummary> {
+  const [createdIdsRaw, contributedIdsRaw, claimableWeiRaw] = await Promise.all([
+    publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'getUserCreatedBounties',
+      args: [userAddress],
+    }),
+    publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'getUserContributedBounties',
+      args: [userAddress],
+    }),
+    publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'claimableRewards',
+      args: [userAddress],
+    }),
+  ]);
+
+  const createdIds = (createdIdsRaw as bigint[]).map(Number);
+  const contributedIds = Array.from(new Set((contributedIdsRaw as bigint[]).map(Number)));
+  const allIds = Array.from(new Set([...createdIds, ...contributedIds]));
+
+  // Multicall batch reads for bounties and submissions
+  const bountyCalls = allIds.map((id) => ({
+    address: SETTLEX_BOUNTY_ADDRESS,
+    abi: SETTLEX_BOUNTY_ABI,
+    functionName: 'getBounty',
+    args: [BigInt(id)],
+  }));
+
+  const subCalls = contributedIds.map((id) => ({
+    address: SETTLEX_BOUNTY_ADDRESS,
+    abi: SETTLEX_BOUNTY_ABI,
+    functionName: 'getBountySubmissions',
+    args: [BigInt(id)],
+  }));
+
+  const [bountyResults, subResults] = await Promise.all([
+    bountyCalls.length > 0
+      ? publicClient.multicall({ contracts: bountyCalls })
+      : Promise.resolve([]),
+    subCalls.length > 0
+      ? publicClient.multicall({ contracts: subCalls })
+      : Promise.resolve([]),
+  ]);
+
+  const bountyMap = new Map<number, FormattedBounty>();
+  bountyResults.forEach((res, idx) => {
+    if (res.status === 'success' && res.result) {
+      bountyMap.set(allIds[idx], formatBounty(res.result as unknown as RawBounty));
+    }
+  });
+
+  const subsMap = new Map<number, FormattedSubmission[]>();
+  subResults.forEach((res, idx) => {
+    if (res.status === 'success' && Array.isArray(res.result)) {
+      subsMap.set(
+        contributedIds[idx],
+        (res.result as unknown as readonly RawSubmission[]).map(formatSubmission)
+      );
+    }
+  });
+
+  // Calculate Creator metrics using exact BigInt math
+  let totalFundedWei = 0n;
+  let totalPaidWei = 0n;
+  let totalRefundedWei = 0n;
+
+  for (const id of createdIds) {
+    const b = bountyMap.get(id);
+    if (!b) continue;
+
+    totalFundedWei += b.rewardWei;
+
+    if (b.state === BountyState.Settled) {
+      if (b.submissionCount === 1) {
+        // Special case: Exactly 1 submission. Winner gets 80%, unused 20% pool refunded to Creator
+        const winnerPayout = (b.rewardWei * 80n) / 100n;
+        const poolRefund = b.rewardWei - winnerPayout;
+        totalPaidWei += winnerPayout;
+        totalRefundedWei += poolRefund;
+      } else if (b.submissionCount > 1) {
+        // Multi-submission: 80% + dust to winner, remainder of 20% pool to other contributors
+        totalPaidWei += b.rewardWei;
+      }
+    } else if (b.state === BountyState.Refunded) {
+      // 100% expired refund
+      totalRefundedWei += b.rewardWei;
+    }
+  }
+
+  // Calculate Contributor metrics using exact BigInt math
+  let winnerRewardsWei = 0n;
+  let participationRewardsWei = 0n;
+  const userLower = userAddress.toLowerCase();
+
+  for (const id of contributedIds) {
+    const b = bountyMap.get(id);
+    const subs = subsMap.get(id) || [];
+    if (!b || b.state !== BountyState.Settled) continue;
+
+    const mySub = subs.find((s) => s.contributor.toLowerCase() === userLower);
+    if (!mySub) continue;
+
+    const isWinner = b.winnerSubmissionId > 0 && mySub.submissionId === b.winnerSubmissionId;
+
+    if (isWinner) {
+      const winner80 = (b.rewardWei * 80n) / 100n;
+      const pool20 = b.rewardWei - winner80;
+      if (b.submissionCount === 1) {
+        winnerRewardsWei += winner80;
+      } else {
+        const otherCount = BigInt(b.submissionCount - 1);
+        const dust = pool20 % otherCount;
+        winnerRewardsWei += winner80 + dust;
+      }
+    } else if (b.submissionCount > 1) {
+      const winner80 = (b.rewardWei * 80n) / 100n;
+      const pool20 = b.rewardWei - winner80;
+      const otherCount = BigInt(b.submissionCount - 1);
+      const perContributor = pool20 / otherCount;
+      participationRewardsWei += perContributor;
+    }
+  }
+
+  const totalEarnedWei = winnerRewardsWei + participationRewardsWei;
+  const pendingClaimable = claimableWeiRaw as bigint;
+
+  return {
+    creator: {
+      totalFundedWei,
+      totalFundedMon: formatEther(totalFundedWei),
+      totalPaidWei,
+      totalPaidMon: formatEther(totalPaidWei),
+      totalRefundedWei,
+      totalRefundedMon: formatEther(totalRefundedWei),
+    },
+    contributor: {
+      totalEarnedWei,
+      totalEarnedMon: formatEther(totalEarnedWei),
+      winnerRewardsWei,
+      winnerRewardsMon: formatEther(winnerRewardsWei),
+      participationRewardsWei,
+      participationRewardsMon: formatEther(participationRewardsWei),
+      pendingClaimableWei: pendingClaimable,
+      pendingClaimableMon: formatEther(pendingClaimable),
+    },
+  };
+}
+
+/**
+ * Builds chronological wallet payment activity ledger items from live contract state and events.
+ */
+export async function fetchWalletPaymentActivity(
+  userAddress: `0x${string}`
+): Promise<PaymentActivityItem[]> {
+  const [createdIdsRaw, contributedIdsRaw, claimableWeiRaw] = await Promise.all([
+    publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'getUserCreatedBounties',
+      args: [userAddress],
+    }),
+    publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'getUserContributedBounties',
+      args: [userAddress],
+    }),
+    publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'claimableRewards',
+      args: [userAddress],
+    }),
+  ]);
+
+  const createdIds = (createdIdsRaw as bigint[]).map(Number);
+  const contributedIds = Array.from(new Set((contributedIdsRaw as bigint[]).map(Number)));
+  const allIds = Array.from(new Set([...createdIds, ...contributedIds]));
+
+  if (allIds.length === 0 && (claimableWeiRaw as bigint) === 0n) {
+    return [];
+  }
+
+  // Multicall batch reads
+  const bountyCalls = allIds.map((id) => ({
+    address: SETTLEX_BOUNTY_ADDRESS,
+    abi: SETTLEX_BOUNTY_ABI,
+    functionName: 'getBounty',
+    args: [BigInt(id)],
+  }));
+
+  const subCalls = allIds.map((id) => ({
+    address: SETTLEX_BOUNTY_ADDRESS,
+    abi: SETTLEX_BOUNTY_ABI,
+    functionName: 'getBountySubmissions',
+    args: [BigInt(id)],
+  }));
+
+  const [bountyResults, subResults] = await Promise.all([
+    bountyCalls.length > 0
+      ? publicClient.multicall({ contracts: bountyCalls })
+      : Promise.resolve([]),
+    subCalls.length > 0
+      ? publicClient.multicall({ contracts: subCalls })
+      : Promise.resolve([]),
+  ]);
+
+  const bountyMap = new Map<number, FormattedBounty>();
+  bountyResults.forEach((res, idx) => {
+    if (res.status === 'success' && res.result) {
+      bountyMap.set(allIds[idx], formatBounty(res.result as unknown as RawBounty));
+    }
+  });
+
+  const subsMap = new Map<number, FormattedSubmission[]>();
+  subResults.forEach((res, idx) => {
+    if (res.status === 'success' && Array.isArray(res.result)) {
+      subsMap.set(
+        allIds[idx],
+        (res.result as unknown as readonly RawSubmission[]).map(formatSubmission)
+      );
+    }
+  });
+
+  const items: PaymentActivityItem[] = [];
+  const userLower = userAddress.toLowerCase();
+
+  // 1. Process Creator activity
+  for (const id of createdIds) {
+    const b = bountyMap.get(id);
+    if (!b) continue;
+
+    const subs = subsMap.get(id) || [];
+    const winnerSub = subs.find((s) => s.submissionId === b.winnerSubmissionId);
+    const winnerAddress = winnerSub?.contributor || b.winnerAddress;
+
+    // A. Creator Funding Deposit
+    items.push({
+      id: `funded-${b.bountyId}`,
+      bountyId: b.bountyId,
+      bountyTitle: b.taskTitle,
+      type: 'CREATOR_FUNDED',
+      typeLabel: 'Bounty Escrow Funded',
+      direction: 'OUTGOING',
+      amountWei: b.rewardWei,
+      amountMon: b.rewardMon,
+      counterparty: SETTLEX_BOUNTY_ADDRESS,
+      counterpartyRole: 'Escrow Lock',
+      timestamp: b.submissionDeadlineTimestamp > 0 ? b.submissionDeadlineTimestamp : Math.floor(Date.now() / 1000),
+      dateFormatted: b.submissionDeadlineDate,
+      status: 'Confirmed',
+      notes: `Funded ${b.rewardMon} MON for Bounty #${b.bountyId}`,
+    });
+
+    // B. Settled Bounty Payouts
+    if (b.state === BountyState.Settled) {
+      const winner80 = (b.rewardWei * 80n) / 100n;
+      const pool20 = b.rewardWei - winner80;
+      const cachedTx = settlementTxCache.get(b.bountyId);
+      const txHash = cachedTx?.txHash;
+      const explorerUrl = cachedTx?.explorerUrl || (txHash ? getExplorerTxUrl(txHash) : undefined);
+
+      if (b.submissionCount === 1) {
+        // Winner payout (80%)
+        items.push({
+          id: `winner-payout-${b.bountyId}`,
+          bountyId: b.bountyId,
+          bountyTitle: b.taskTitle,
+          type: 'WINNER_PAYOUT',
+          typeLabel: 'Winner Reward Disbursed',
+          direction: 'OUTGOING',
+          amountWei: winner80,
+          amountMon: formatEther(winner80),
+          counterparty: winnerAddress,
+          counterpartyRole: 'Winning Contributor',
+          timestamp: b.settledAtTimestamp,
+          dateFormatted: b.settledAtDate || 'Settled',
+          txHash,
+          explorerUrl,
+          status: 'Confirmed',
+          notes: `Paid 80% to Winner #${b.winnerSubmissionId}`,
+        });
+
+        // 20% Unused pool returned to creator
+        items.push({
+          id: `refund-partial-${b.bountyId}`,
+          bountyId: b.bountyId,
+          bountyTitle: b.taskTitle,
+          type: 'CREATOR_REFUND_PARTIAL',
+          typeLabel: 'Unused 20% Pool Refunded',
+          direction: 'INCOMING',
+          amountWei: pool20,
+          amountMon: formatEther(pool20),
+          counterparty: SETTLEX_BOUNTY_ADDRESS,
+          counterpartyRole: 'Contract Escrow',
+          timestamp: b.settledAtTimestamp,
+          dateFormatted: b.settledAtDate || 'Settled',
+          txHash,
+          explorerUrl,
+          status: 'Confirmed',
+          notes: 'Returned to Creator (Single Valid Submission)',
+        });
+      } else if (b.submissionCount > 1) {
+        const others = BigInt(b.submissionCount - 1);
+        const dust = pool20 % others;
+        const finalWinnerPayout = winner80 + dust;
+        const participantPoolDisbursed = pool20 - dust;
+
+        // Winner Payout (80% + dust)
+        items.push({
+          id: `winner-payout-${b.bountyId}`,
+          bountyId: b.bountyId,
+          bountyTitle: b.taskTitle,
+          type: 'WINNER_PAYOUT',
+          typeLabel: 'Winner Reward Disbursed',
+          direction: 'OUTGOING',
+          amountWei: finalWinnerPayout,
+          amountMon: formatEther(finalWinnerPayout),
+          counterparty: winnerAddress,
+          counterpartyRole: 'Winning Contributor',
+          timestamp: b.settledAtTimestamp,
+          dateFormatted: b.settledAtDate || 'Settled',
+          txHash,
+          explorerUrl,
+          status: 'Confirmed',
+          notes: `Paid 80% (+ division dust) to Winner #${b.winnerSubmissionId}`,
+        });
+
+        // Participant Pool (20%)
+        items.push({
+          id: `pool-payout-${b.bountyId}`,
+          bountyId: b.bountyId,
+          bountyTitle: b.taskTitle,
+          type: 'PARTICIPATION_PAYOUT',
+          typeLabel: 'Participation Pool Disbursed',
+          direction: 'OUTGOING',
+          amountWei: participantPoolDisbursed,
+          amountMon: formatEther(participantPoolDisbursed),
+          counterpartyRole: `${b.submissionCount - 1} Non-Winning Contributors`,
+          timestamp: b.settledAtTimestamp,
+          dateFormatted: b.settledAtDate || 'Settled',
+          txHash,
+          explorerUrl,
+          status: 'Confirmed',
+          notes: `Shared equally across ${b.submissionCount - 1} eligible contributors`,
+        });
+      }
+    } else if (b.state === BountyState.Refunded) {
+      // 100% Expired Refund
+      const cachedTx = settlementTxCache.get(b.bountyId);
+      const txHash = cachedTx?.txHash;
+      const explorerUrl = cachedTx?.explorerUrl || (txHash ? getExplorerTxUrl(txHash) : undefined);
+
+      items.push({
+        id: `refund-full-${b.bountyId}`,
+        bountyId: b.bountyId,
+        bountyTitle: b.taskTitle,
+        type: 'CREATOR_REFUND_FULL',
+        typeLabel: '100% Expired Bounty Refund',
+        direction: 'INCOMING',
+        amountWei: b.rewardWei,
+        amountMon: b.rewardMon,
+        counterparty: SETTLEX_BOUNTY_ADDRESS,
+        counterpartyRole: 'Contract Escrow',
+        timestamp: b.settledAtTimestamp,
+        dateFormatted: b.settledAtDate || 'Refunded',
+        txHash,
+        explorerUrl,
+        status: 'Confirmed',
+        notes: 'Full deposit reclaimed (0 submissions received)',
+      });
+    }
+  }
+
+  // 2. Process Contributor activity
+  for (const id of contributedIds) {
+    const b = bountyMap.get(id);
+    const subs = subsMap.get(id) || [];
+    if (!b) continue;
+
+    const mySub = subs.find((s) => s.contributor.toLowerCase() === userLower);
+    if (!mySub) continue;
+
+    if (b.state === BountyState.Settled) {
+      const isWinner = b.winnerSubmissionId > 0 && mySub.submissionId === b.winnerSubmissionId;
+      const cachedTx = settlementTxCache.get(b.bountyId);
+      const txHash = cachedTx?.txHash;
+      const explorerUrl = cachedTx?.explorerUrl || (txHash ? getExplorerTxUrl(txHash) : undefined);
+      const winner80 = (b.rewardWei * 80n) / 100n;
+      const pool20 = b.rewardWei - winner80;
+
+      if (isWinner) {
+        let finalWinnerPayout = winner80;
+        if (b.submissionCount > 1) {
+          const others = BigInt(b.submissionCount - 1);
+          finalWinnerPayout = winner80 + (pool20 % others);
+        }
+
+        items.push({
+          id: `winner-received-${b.bountyId}`,
+          bountyId: b.bountyId,
+          bountyTitle: b.taskTitle,
+          type: 'WINNER_PAYOUT',
+          typeLabel: 'Winner Reward Received',
+          direction: 'INCOMING',
+          amountWei: finalWinnerPayout,
+          amountMon: formatEther(finalWinnerPayout),
+          counterparty: b.creator,
+          counterpartyRole: 'Bounty Creator',
+          timestamp: b.settledAtTimestamp,
+          dateFormatted: b.settledAtDate || 'Settled',
+          txHash,
+          explorerUrl,
+          status: 'Confirmed',
+          isWinner: true,
+          notes: `Submission #${mySub.submissionId} selected as winner (80% payout)`,
+        });
+      } else if (b.submissionCount > 1) {
+        const others = BigInt(b.submissionCount - 1);
+        const perContributor = pool20 / others;
+
+        items.push({
+          id: `participant-received-${b.bountyId}`,
+          bountyId: b.bountyId,
+          bountyTitle: b.taskTitle,
+          type: 'PARTICIPATION_PAYOUT',
+          typeLabel: 'Participation Reward Received',
+          direction: 'INCOMING',
+          amountWei: perContributor,
+          amountMon: formatEther(perContributor),
+          counterparty: b.creator,
+          counterpartyRole: 'Bounty Creator',
+          timestamp: b.settledAtTimestamp,
+          dateFormatted: b.settledAtDate || 'Settled',
+          txHash,
+          explorerUrl,
+          status: 'Confirmed',
+          isWinner: false,
+          notes: `Equal share of 20% participation pool for submission #${mySub.submissionId}`,
+        });
+      }
+    }
+  }
+
+  // 3. Fallback Claimable Pending Balance
+  const claimableWei = claimableWeiRaw as bigint;
+  if (claimableWei > 0n) {
+    items.push({
+      id: `claimable-${userLower}`,
+      bountyId: 0,
+      bountyTitle: 'Fallback Escrow Balance',
+      type: 'CLAIMABLE_WITHDRAWAL',
+      typeLabel: 'Pending Pull-Claim Balance',
+      direction: 'INCOMING',
+      amountWei: claimableWei,
+      amountMon: formatEther(claimableWei),
+      counterparty: SETTLEX_BOUNTY_ADDRESS,
+      counterpartyRole: 'Contract Escrow',
+      timestamp: Math.floor(Date.now() / 1000),
+      dateFormatted: 'Available Now',
+      status: 'Pending',
+      notes: 'Native transfer was credited to fallback mapping. Use Claim Reward to withdraw.',
+    });
+  }
+
+  // Sort descending by timestamp
+  items.sort((a, b) => b.timestamp - a.timestamp);
+
+  // Trigger non-blocking background resolution for any settled items without a cached txHash
+  const settledIdsWithoutHash = Array.from(
+    new Set(
+      items
+        .filter((item) => !item.txHash && item.bountyId > 0)
+        .map((item) => item.bountyId)
+    )
+  );
+
+  if (settledIdsWithoutHash.length > 0) {
+    // Resolve up to 5 at a time without bursting the RPC
+    Promise.allSettled(
+      settledIdsWithoutHash.slice(0, 5).map((id) => {
+        const b = bountyMap.get(id);
+        return fetchSettlementTxHash(id, b?.state, b?.settledAtTimestamp);
+      })
+    ).catch(console.error);
+  }
+
+  return items;
 }
 

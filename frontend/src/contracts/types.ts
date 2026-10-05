@@ -183,3 +183,76 @@ export interface SubmitWorkParams {
   proofUri: string;
   notes: string;
 }
+
+/* ==========================================================================
+   SettleX V2: Payment Activity & Settlement Transaction Types
+   ========================================================================== */
+
+export type PaymentType =
+  | 'CREATOR_FUNDED'
+  | 'WINNER_PAYOUT'
+  | 'PARTICIPATION_PAYOUT'
+  | 'CREATOR_REFUND_FULL'
+  | 'CREATOR_REFUND_PARTIAL'
+  | 'CLAIMABLE_WITHDRAWAL';
+
+export type PaymentDirection = 'INCOMING' | 'OUTGOING';
+
+export type PaymentStatus = 'Confirmed' | 'Pending';
+
+export interface PaymentActivityItem {
+  id: string;
+  bountyId: number;
+  bountyTitle?: string;
+  type: PaymentType;
+  typeLabel: string;
+  direction: PaymentDirection;
+  amountWei: bigint;
+  amountMon: string;
+  counterparty?: string;
+  counterpartyRole?: string;
+  timestamp: number;
+  dateFormatted: string;
+  txHash?: `0x${string}` | string;
+  explorerUrl?: string;
+  status: PaymentStatus;
+  isWinner?: boolean;
+  notes?: string;
+}
+
+export interface CreatorFinancialSummary {
+  totalFundedWei: bigint;
+  totalFundedMon: string;
+  totalPaidWei: bigint;
+  totalPaidMon: string;
+  totalRefundedWei: bigint;
+  totalRefundedMon: string;
+}
+
+export interface ContributorFinancialSummary {
+  totalEarnedWei: bigint;
+  totalEarnedMon: string;
+  winnerRewardsWei: bigint;
+  winnerRewardsMon: string;
+  participationRewardsWei: bigint;
+  participationRewardsMon: string;
+  pendingClaimableWei: bigint;
+  pendingClaimableMon: string;
+}
+
+export interface PaymentSummary {
+  creator: CreatorFinancialSummary;
+  contributor: ContributorFinancialSummary;
+}
+
+export interface SettlementTxDetails {
+  bountyId: number;
+  txHash: `0x${string}`;
+  blockNumber: bigint;
+  explorerUrl: string;
+  timestamp: number;
+  eventType: 'WinnerSelected' | 'DisputeResolved' | 'BountyRefunded';
+  winnerAddress?: string;
+  winnerPayoutWei?: bigint;
+  participantPoolPayoutWei?: bigint;
+}

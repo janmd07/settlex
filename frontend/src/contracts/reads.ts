@@ -278,7 +278,8 @@ export async function fetchHasSubmitted(bountyId: bigint | number, contributor: 
 }
 
 /**
- * Reads all bounties sequentially from 1 up to nextBountyId - 1.
+ * Reads all bounties from 1 up to nextBountyId - 1 using batched Multicall3 reads.
+ * Falls back to individual calls if multicall encounters an unexpected issue.
  */
 export async function fetchAllBounties(): Promise<FormattedBounty[]> {
   try {
@@ -289,7 +290,73 @@ export async function fetchAllBounties(): Promise<FormattedBounty[]> {
     }
 
     const ids = Array.from({ length: nextId - 1 }, (_, i) => i + 1);
-    const results = await Promise.allSettled(
+    const bounties: FormattedBounty[] = [];
+
+    // Attempt batched Multicall3 read first
+    try {
+      const bountyCalls = ids.map((id) => ({
+        address: SETTLEX_BOUNTY_ADDRESS,
+        abi: SETTLEX_BOUNTY_ABI,
+        functionName: 'getBounty',
+        args: [BigInt(id)],
+      }));
+
+      const results = await publicClient.multicall({
+        contracts: bountyCalls,
+      });
+
+      const settledWithWinner: FormattedBounty[] = [];
+
+      for (let i = 0; i < results.length; i++) {
+        const res = results[i];
+        if (res.status === 'success' && res.result) {
+          const formatted = formatBounty(res.result as unknown as RawBounty);
+          bounties.push(formatted);
+          if (formatted.state === BountyState.Settled && formatted.winnerSubmissionId > 0) {
+            settledWithWinner.push(formatted);
+          }
+        } else if (res.status === 'failure') {
+          console.warn(`Multicall item for bounty ID ${ids[i]} failed:`, res.error);
+        }
+      }
+
+      // If any settled bounties have winners, fetch winner contributor address
+      if (settledWithWinner.length > 0) {
+        try {
+          const subCalls = settledWithWinner.map((b) => ({
+            address: SETTLEX_BOUNTY_ADDRESS,
+            abi: SETTLEX_BOUNTY_ABI,
+            functionName: 'getBountySubmissions',
+            args: [BigInt(b.bountyId)],
+          }));
+
+          const subResults = await publicClient.multicall({
+            contracts: subCalls,
+          });
+
+          subResults.forEach((subRes, idx) => {
+            if (subRes.status === 'success' && Array.isArray(subRes.result)) {
+              const rawSubs = subRes.result as unknown as readonly RawSubmission[];
+              const subs = rawSubs.map(formatSubmission);
+              const targetBounty = settledWithWinner[idx];
+              const winner = subs.find((s) => s.submissionId === targetBounty.winnerSubmissionId);
+              if (winner) {
+                targetBounty.winnerAddress = winner.contributor;
+              }
+            }
+          });
+        } catch (subErr) {
+          console.warn('Failed to batch fetch submissions for settled bounties:', subErr);
+        }
+      }
+
+      return bounties;
+    } catch (multicallErr) {
+      console.warn('Multicall3 batch read failed, falling back to sequential reads:', multicallErr);
+    }
+
+    // Fallback: Individual reads with Promise.allSettled
+    const fallbackResults = await Promise.allSettled(
       ids.map(async (id) => {
         const bounty = await fetchBounty(id);
         if (bounty.state === BountyState.Settled && bounty.winnerSubmissionId > 0) {
@@ -305,12 +372,11 @@ export async function fetchAllBounties(): Promise<FormattedBounty[]> {
       })
     );
 
-    const bounties: FormattedBounty[] = [];
-    for (const res of results) {
+    for (const res of fallbackResults) {
       if (res.status === 'fulfilled') {
         bounties.push(res.value);
       } else {
-        console.warn('Failed to load a bounty:', res.reason);
+        console.warn('Failed to load a bounty during fallback:', res.reason);
       }
     }
 

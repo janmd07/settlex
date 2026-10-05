@@ -16,7 +16,9 @@ import styles from './ContractInspector.module.css';
 
 type ActiveTab = 'manage' | 'create';
 type ExploreView = 'active' | 'completed';
-type SortOption = 'reward' | 'deadline' | 'capacity' | 'newest';
+type SortOption = 'reward-desc' | 'reward-asc' | 'newest' | 'deadline' | 'capacity' | 'reward';
+
+const PAGE_SIZE = 10;
 
 export interface ContractInspectorProps {
   viewMode?: 'home-stats' | 'bounties' | 'create' | 'all';
@@ -72,9 +74,15 @@ export function ContractInspector({
   const [exploreView, setExploreView] = useState<ExploreView>('active');
   const [selectedBountyId, setSelectedBountyId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortOption, setSortOption] = useState<SortOption>('reward');
+  const [sortOption, setSortOption] = useState<SortOption>('reward-desc');
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [lookupBountyId, setLookupBountyId] = useState<string>('');
   const [readError, setReadError] = useState<string | null>(null);
+
+  // Reset pagination to Page 1 when search query, sort option, or view changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sortOption, exploreView, myBountiesOnly]);
 
   // Sync with external tab or viewMode if provided
   useEffect(() => {
@@ -143,16 +151,10 @@ export function ContractInspector({
     setReadError(null);
   };
 
-  // Search submit handler
-  const handleSearchSubmit = async (e: React.FormEvent) => {
+  // Search submit handler: ensures current page is reset to 1
+  const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const query = searchQuery.trim();
-    if (!query) return;
-
-    const id = parseInt(query, 10);
-    if (!isNaN(id) && id > 0) {
-      handleViewBounty(id);
-    }
+    setCurrentPage(1);
   };
 
   // Direct lookup handler in detail view
@@ -245,18 +247,26 @@ export function ContractInspector({
 
     const filtered = list.filter((b) => {
       if (!query) return true;
+      const cleanIdQuery = query.startsWith('#') ? query.slice(1).trim() : query;
       return (
         b.taskTitle.toLowerCase().includes(query) ||
         b.taskMetadataUri.toLowerCase().includes(query) ||
         b.acceptanceCriteria.toLowerCase().includes(query) ||
-        String(b.bountyId) === query ||
+        String(b.bountyId) === cleanIdQuery ||
+        `#${b.bountyId}` === query ||
         b.creator.toLowerCase().includes(query)
       );
     });
 
     return [...filtered].sort((a, b) => {
-      if (sortOption === 'reward') {
+      if (sortOption === 'reward' || sortOption === 'reward-desc') {
         return parseFloat(b.rewardMon) - parseFloat(a.rewardMon);
+      }
+      if (sortOption === 'reward-asc') {
+        return parseFloat(a.rewardMon) - parseFloat(b.rewardMon);
+      }
+      if (sortOption === 'newest') {
+        return b.bountyId - a.bountyId;
       }
       if (sortOption === 'deadline') {
         return a.submissionDeadlineTimestamp - b.submissionDeadlineTimestamp;
@@ -264,12 +274,71 @@ export function ContractInspector({
       if (sortOption === 'capacity') {
         return b.slotsRemaining - a.slotsRemaining;
       }
-      if (sortOption === 'newest') {
-        return b.bountyId - a.bountyId;
-      }
       return 0;
     });
   }, [exploreView, activeBountiesList, completedBountiesList, searchQuery, sortOption]);
+
+  const totalPages = Math.max(1, Math.ceil(displayedBounties.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedBounties = useMemo(() => {
+    const startIndex = (safeCurrentPage - 1) * PAGE_SIZE;
+    return displayedBounties.slice(startIndex, startIndex + PAGE_SIZE);
+  }, [displayedBounties, safeCurrentPage]);
+
+  // Reusable Pagination Controls Element
+  const paginationControlsElement = totalPages > 1 && (
+    <nav className={styles.paginationControls} aria-label="Bounties pagination">
+      {safeCurrentPage > 1 && (
+        <button
+          type="button"
+          className={styles.paginationBtn}
+          onClick={() => {
+            setCurrentPage((p) => Math.max(1, p - 1));
+          }}
+          aria-label="Previous page"
+        >
+          &larr; Previous
+        </button>
+      )}
+      <span className={styles.paginationInfo}>
+        Page {safeCurrentPage} of {totalPages}
+      </span>
+      {safeCurrentPage < totalPages && (
+        <button
+          type="button"
+          className={styles.paginationBtn}
+          onClick={() => {
+            setCurrentPage((p) => Math.min(totalPages, p + 1));
+          }}
+          aria-label="Next page"
+        >
+          Next &rarr;
+        </button>
+      )}
+    </nav>
+  );
+
+  // Clean empty state when search/filter returns zero matches
+  const emptyFilterElement = (
+    <div className={styles.emptyFilterState}>
+      <Icon name="search" size={24} />
+      <div className={styles.emptyFilterTitle}>No bounties found.</div>
+      <p className={styles.emptyFilterSubtitle}>
+        No bounties match &ldquo;{searchQuery}&rdquo;. Try adjusting your search query or sorting options.
+      </p>
+      <button
+        type="button"
+        className={styles.secondaryBtnSmall}
+        onClick={() => {
+          setSearchQuery('');
+          setCurrentPage(1);
+        }}
+      >
+        Clear Search
+      </button>
+    </div>
+  );
 
   // 80/20 Reward calculation preview
   const parsedReward = parseFloat(formRewardMon) || 0;
@@ -570,7 +639,10 @@ export function ContractInspector({
                         <button
                           type="button"
                           className={styles.searchClear}
-                          onClick={() => setSearchQuery('')}
+                          onClick={() => {
+                            setSearchQuery('');
+                            setCurrentPage(1);
+                          }}
                         >
                           &times;
                         </button>
@@ -582,12 +654,16 @@ export function ContractInspector({
                       <select
                         className={styles.sortSelect}
                         value={sortOption}
-                        onChange={(e) => setSortOption(e.target.value as SortOption)}
+                        onChange={(e) => {
+                          setSortOption(e.target.value as SortOption);
+                          setCurrentPage(1);
+                        }}
                       >
-                        <option value="reward">Highest Reward</option>
+                        <option value="reward-desc">Highest Reward</option>
+                        <option value="reward-asc">Lowest Reward</option>
+                        <option value="newest">Newest</option>
                         <option value="deadline">Ending Soon</option>
                         <option value="capacity">Most Capacity</option>
-                        <option value="newest">Newest</option>
                       </select>
                     </div>
 
@@ -627,144 +703,151 @@ export function ContractInspector({
                 {exploreView === 'active' && (
                   <>
                     {displayedBounties.length === 0 && !isLoadingAllBounties ? (
-                      /* Reference-inspired Empty State */
-                      <div className={styles.emptyStateCard}>
-                        <div className={`${styles.emptyIcon} ${styles.tonePurple}`}>
-                          <Image
-                            src="/settlex-logo.png"
-                            alt="SettleX"
-                            width={36}
-                            height={26}
-                            priority
-                            unoptimized
-                            style={{ objectFit: 'contain' }}
-                          />
-                        </div>
-                        <div className={styles.emptyCopy}>
-                          <h2>No active bounties yet.</h2>
-                          <p>
-                            Be the first creator to publish an onchain bounty and start receiving
-                            contributions.
-                          </p>
-                          <div className={styles.emptyButtons}>
-                            <button
-                              className={styles.primaryBtnSmall}
-                              onClick={() => setActiveTab('create')}
-                            >
-                              <span>Create your first bounty</span>
-                              <Icon name="arrow" size={14} />
-                            </button>
-                            <button
-                              className={styles.secondaryBtnSmall}
-                              onClick={() => setExploreView('completed')}
-                            >
-                              Explore completed bounties
-                            </button>
+                      searchQuery.trim() ? (
+                        emptyFilterElement
+                      ) : (
+                        /* Reference-inspired Empty State */
+                        <div className={styles.emptyStateCard}>
+                          <div className={`${styles.emptyIcon} ${styles.tonePurple}`}>
+                            <Image
+                              src="/settlex-logo.png"
+                              alt="SettleX"
+                              width={36}
+                              height={26}
+                              priority
+                              unoptimized
+                              style={{ objectFit: 'contain' }}
+                            />
+                          </div>
+                          <div className={styles.emptyCopy}>
+                            <h2>No active bounties yet.</h2>
+                            <p>
+                              Be the first creator to publish an onchain bounty and start receiving
+                              contributions.
+                            </p>
+                            <div className={styles.emptyButtons}>
+                              <button
+                                className={styles.primaryBtnSmall}
+                                onClick={() => setActiveTab('create')}
+                              >
+                                <span>Create your first bounty</span>
+                                <Icon name="arrow" size={14} />
+                              </button>
+                              <button
+                                className={styles.secondaryBtnSmall}
+                                onClick={() => setExploreView('completed')}
+                              >
+                                Explore completed bounties
+                              </button>
+                            </div>
+                          </div>
+                          <div className={styles.emptyIllustration} aria-hidden="true">
+                            <div className={styles.docGlow}>
+                              <span />
+                              <span />
+                              <span />
+                              <b>
+                                <Icon name="plus" size={24} />
+                              </b>
+                            </div>
+                            <div className={styles.illustrationLine} />
                           </div>
                         </div>
-                        <div className={styles.emptyIllustration} aria-hidden="true">
-                          <div className={styles.docGlow}>
-                            <span />
-                            <span />
-                            <span />
-                            <b>
-                              <Icon name="plus" size={24} />
-                            </b>
-                          </div>
-                          <div className={styles.illustrationLine} />
-                        </div>
-                      </div>
+                      )
                     ) : (
-                      <div className={styles.bountyGrid}>
-                        {displayedBounties.map((b) => (
-                          <div key={b.bountyId} className={styles.cardItem}>
-                            {/* Card Top: ID & State */}
-                            <div className={styles.cardItemTop}>
-                              <div className={styles.cardIdGroup}>
-                                <span className={styles.cardId}>Bounty #{b.bountyId}</span>
-                                <span className={`${styles.statusBadge} ${styles[`status_${b.state}`]}`}>
-                                  {b.stateLabel}
+                      <>
+                        <div className={styles.bountyGrid}>
+                          {paginatedBounties.map((b) => (
+                            <div key={b.bountyId} className={styles.cardItem}>
+                              {/* Card Top: ID & State */}
+                              <div className={styles.cardItemTop}>
+                                <div className={styles.cardIdGroup}>
+                                  <span className={styles.cardId}>Bounty #{b.bountyId}</span>
+                                  <span className={`${styles.statusBadge} ${styles[`status_${b.state}`]}`}>
+                                    {b.stateLabel}
+                                  </span>
+                                </div>
+                                <span className={styles.cardDeadline}>
+                                  {b.state === BountyState.Open
+                                    ? formatCountdown(b.submissionDeadlineTimestamp)
+                                    : b.stateLabel}
                                 </span>
                               </div>
-                              <span className={styles.cardDeadline}>
-                                {b.state === BountyState.Open
-                                  ? formatCountdown(b.submissionDeadlineTimestamp)
-                                  : b.stateLabel}
-                              </span>
-                            </div>
 
-                            {/* Card Title & Description */}
-                            <div className={styles.cardItemBody}>
-                              <h3 className={styles.cardTitle}>{b.taskTitle}</h3>
-                              {b.taskMetadataUri && (
-                                <p className={styles.cardDesc}>
-                                  {b.taskMetadataUri.length > 90
-                                    ? `${b.taskMetadataUri.slice(0, 90)}...`
-                                    : b.taskMetadataUri}
-                                </p>
-                              )}
-                            </div>
-
-                            {/* 80/20 Reward Allocation Highlights */}
-                            <div className={styles.cardRewardBox}>
-                              <div className={styles.cardRewardMain}>
-                                <span className={styles.cardRewardLabel}>Reward</span>
-                                <span className={styles.cardRewardValue}>{b.rewardMon} MON</span>
+                              {/* Card Title & Description */}
+                              <div className={styles.cardItemBody}>
+                                <h3 className={styles.cardTitle}>{b.taskTitle}</h3>
+                                {b.taskMetadataUri && (
+                                  <p className={styles.cardDesc}>
+                                    {b.taskMetadataUri.length > 90
+                                      ? `${b.taskMetadataUri.slice(0, 90)}...`
+                                      : b.taskMetadataUri}
+                                  </p>
+                                )}
                               </div>
-                              <div className={styles.cardRewardSplits}>
-                                <div className={styles.cardSplit}>
-                                  <span className={styles.cardSplitLabel}>Winner (80%)</span>
-                                  <span className={`${styles.cardSplitValue} ${styles.winnerColor}`}>
-                                    {b.winnerMon} MON
-                                  </span>
-                                </div>
-                                <div className={styles.cardSplit}>
-                                  <span className={styles.cardSplitLabel}>Pool (20%)</span>
-                                  <span className={`${styles.cardSplitValue} ${styles.poolColor}`}>
-                                    {b.participationPoolMon} MON
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
 
-                            {/* Submission Progress & Creator */}
-                            <div className={styles.cardFooter}>
-                              <div className={styles.cardMetaCol}>
-                                <span className={styles.cardMetaLabel}>Submissions</span>
-                                <div className={styles.cardProgressWrapper}>
-                                  <span className={styles.cardProgressText}>
-                                    {b.submissionCount} / {b.maxSubmissions}
-                                  </span>
-                                  <div className={styles.progressBar}>
-                                    <div
-                                      className={styles.progressFill}
-                                      style={{
-                                        width: `${(b.submissionCount / b.maxSubmissions) * 100}%`,
-                                      }}
-                                    />
+                              {/* 80/20 Reward Allocation Highlights */}
+                              <div className={styles.cardRewardBox}>
+                                <div className={styles.cardRewardMain}>
+                                  <span className={styles.cardRewardLabel}>Reward</span>
+                                  <span className={styles.cardRewardValue}>{b.rewardMon} MON</span>
+                                </div>
+                                <div className={styles.cardRewardSplits}>
+                                  <div className={styles.cardSplit}>
+                                    <span className={styles.cardSplitLabel}>Winner (80%)</span>
+                                    <span className={`${styles.cardSplitValue} ${styles.winnerColor}`}>
+                                      {b.winnerMon} MON
+                                    </span>
+                                  </div>
+                                  <div className={styles.cardSplit}>
+                                    <span className={styles.cardSplitLabel}>Pool (20%)</span>
+                                    <span className={`${styles.cardSplitValue} ${styles.poolColor}`}>
+                                      {b.participationPoolMon} MON
+                                    </span>
                                   </div>
                                 </div>
                               </div>
 
-                              <div className={styles.cardMetaCol}>
-                                <span className={styles.cardMetaLabel}>Creator</span>
-                                <span className={styles.cardMetaMono}>
-                                  {b.creator.slice(0, 6)}...{b.creator.slice(-4)}
-                                </span>
-                              </div>
-                            </div>
+                              {/* Submission Progress & Creator */}
+                              <div className={styles.cardFooter}>
+                                <div className={styles.cardMetaCol}>
+                                  <span className={styles.cardMetaLabel}>Submissions</span>
+                                  <div className={styles.cardProgressWrapper}>
+                                    <span className={styles.cardProgressText}>
+                                      {b.submissionCount} / {b.maxSubmissions}
+                                    </span>
+                                    <div className={styles.progressBar}>
+                                      <div
+                                        className={styles.progressFill}
+                                        style={{
+                                          width: `${(b.submissionCount / b.maxSubmissions) * 100}%`,
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
 
-                            {/* CTA Button */}
-                            <button
-                              className={styles.buttonCardCta}
-                              onClick={() => handleViewBounty(b.bountyId)}
-                            >
-                              <span>View Bounty</span>
-                              <Icon name="arrow" size={14} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
+                                <div className={styles.cardMetaCol}>
+                                  <span className={styles.cardMetaLabel}>Creator</span>
+                                  <span className={styles.cardMetaMono}>
+                                    {b.creator.slice(0, 6)}...{b.creator.slice(-4)}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* CTA Button */}
+                              <button
+                                className={styles.buttonCardCta}
+                                onClick={() => handleViewBounty(b.bountyId)}
+                              >
+                                <span>View Bounty</span>
+                                <Icon name="arrow" size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {paginationControlsElement}
+                      </>
                     )}
                   </>
                 )}
@@ -773,74 +856,81 @@ export function ContractInspector({
                 {exploreView === 'completed' && (
                   <>
                     {displayedBounties.length === 0 && !isLoadingAllBounties ? (
-                      <div className={styles.emptyDiscovery}>
-                        <div className={styles.emptyTitle}>No completed bounties yet.</div>
-                        <p className={styles.emptySubtitle}>
-                          Bounties that have been reviewed and settled will appear here.
-                        </p>
-                      </div>
+                      searchQuery.trim() ? (
+                        emptyFilterElement
+                      ) : (
+                        <div className={styles.emptyDiscovery}>
+                          <div className={styles.emptyTitle}>No completed bounties yet.</div>
+                          <p className={styles.emptySubtitle}>
+                            Bounties that have been reviewed and settled will appear here.
+                          </p>
+                        </div>
+                      )
                     ) : (
-                      <div className={styles.bountyGrid}>
-                        {displayedBounties.map((b) => (
-                          <div
-                            key={b.bountyId}
-                            className={`${styles.cardItem} ${styles.cardItemCompleted}`}
-                          >
-                            {/* Card Top: ID & Settled Badge */}
-                            <div className={styles.cardItemTop}>
-                              <div className={styles.cardIdGroup}>
-                                <span className={styles.cardId}>Bounty #{b.bountyId}</span>
-                                <span className={`${styles.statusBadge} ${styles.status_4}`}>
-                                  {b.stateLabel}
-                                </span>
-                              </div>
-                              <span className={styles.cardTimestamp}>
-                                {b.settledAtDate || 'Settled Onchain'}
-                              </span>
-                            </div>
-
-                            {/* Title */}
-                            <div className={styles.cardItemBody}>
-                              <h3 className={styles.cardTitle}>{b.taskTitle}</h3>
-                            </div>
-
-                            {/* Completed Details */}
-                            <div className={styles.completedDetailBox}>
-                              <div className={styles.completedRow}>
-                                <span className={styles.completedLabel}>Total Reward:</span>
-                                <span className={styles.completedValueBold}>{b.rewardMon} MON</span>
-                              </div>
-                              <div className={styles.completedRow}>
-                                <span className={styles.completedLabel}>Winner:</span>
-                                <span className={styles.completedValueMono}>
-                                  {b.winnerAddress
-                                    ? `${b.winnerAddress.slice(0, 6)}...${b.winnerAddress.slice(-4)}`
-                                    : b.state === BountyState.Refunded
-                                    ? 'Refunded to Creator'
-                                    : b.winnerSubmissionId > 0
-                                    ? `Submission #${b.winnerSubmissionId}`
-                                    : 'None'}
-                                </span>
-                              </div>
-                              <div className={styles.completedRow}>
-                                <span className={styles.completedLabel}>Submissions:</span>
-                                <span className={styles.completedValue}>
-                                  {b.submissionCount} Submissions
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* CTA Button */}
-                            <button
-                              className={styles.buttonCardSecondary}
-                              onClick={() => handleViewBounty(b.bountyId)}
+                      <>
+                        <div className={styles.bountyGrid}>
+                          {paginatedBounties.map((b) => (
+                            <div
+                              key={b.bountyId}
+                              className={`${styles.cardItem} ${styles.cardItemCompleted}`}
                             >
-                              <span>View Bounty</span>
-                              <Icon name="arrow" size={14} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
+                              {/* Card Top: ID & Settled Badge */}
+                              <div className={styles.cardItemTop}>
+                                <div className={styles.cardIdGroup}>
+                                  <span className={styles.cardId}>Bounty #{b.bountyId}</span>
+                                  <span className={`${styles.statusBadge} ${styles.status_4}`}>
+                                    {b.stateLabel}
+                                  </span>
+                                </div>
+                                <span className={styles.cardTimestamp}>
+                                  {b.settledAtDate || 'Settled Onchain'}
+                                </span>
+                              </div>
+
+                              {/* Title */}
+                              <div className={styles.cardItemBody}>
+                                <h3 className={styles.cardTitle}>{b.taskTitle}</h3>
+                              </div>
+
+                              {/* Completed Details */}
+                              <div className={styles.completedDetailBox}>
+                                <div className={styles.completedRow}>
+                                  <span className={styles.completedLabel}>Total Reward:</span>
+                                  <span className={styles.completedValueBold}>{b.rewardMon} MON</span>
+                                </div>
+                                <div className={styles.completedRow}>
+                                  <span className={styles.completedLabel}>Winner:</span>
+                                  <span className={styles.completedValueMono}>
+                                    {b.winnerAddress
+                                      ? `${b.winnerAddress.slice(0, 6)}...${b.winnerAddress.slice(-4)}`
+                                      : b.state === BountyState.Refunded
+                                      ? 'Refunded to Creator'
+                                      : b.winnerSubmissionId > 0
+                                      ? `Submission #${b.winnerSubmissionId}`
+                                      : 'None'}
+                                  </span>
+                                </div>
+                                <div className={styles.completedRow}>
+                                  <span className={styles.completedLabel}>Submissions:</span>
+                                  <span className={styles.completedValue}>
+                                    {b.submissionCount} Submissions
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* CTA Button */}
+                              <button
+                                className={styles.buttonCardSecondary}
+                                onClick={() => handleViewBounty(b.bountyId)}
+                              >
+                                <span>View Bounty</span>
+                                <Icon name="arrow" size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {paginationControlsElement}
+                      </>
                     )}
                   </>
                 )}

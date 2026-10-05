@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMonadWallet } from '../hooks/useMonadWallet';
 import { Icon } from './Icons';
+import { WalletConnectModal } from './WalletConnectModal';
 import styles from './WalletBar.module.css';
 
 export function WalletBar() {
@@ -15,6 +16,7 @@ export function WalletBar() {
     isSwitching,
     status,
     connectWallet,
+    connectedWalletName,
     switchToMonadTestnet,
     disconnectWallet,
     clearStatus,
@@ -37,6 +39,7 @@ export function WalletBar() {
 
   return (
     <div className={styles.walletArea}>
+      <WalletConnectModal />
       {/* Network Status */}
       <div className={styles.network}>
         <i className={isCorrectNetwork ? styles.netGreen : styles.netAmber} />

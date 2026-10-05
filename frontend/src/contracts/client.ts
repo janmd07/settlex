@@ -10,6 +10,7 @@ import {
   MONAD_TESTNET_EXPLORER_URL,
   MONAD_TESTNET_RPC_URL,
 } from '../config/contract';
+import { getEthereumProvider } from '../utils/wallet';
 
 /**
  * Viem Chain definition for Monad Testnet
@@ -52,13 +53,14 @@ export const publicClient = createPublicClient({
  * Creates a Wallet Client connected to the user's browser provider (window.ethereum).
  */
 export function getWalletClient(account?: `0x${string}`) {
-  if (typeof window === 'undefined' || !window.ethereum) {
-    throw new Error('No EVM wallet detected. Please install MetaMask, Rabby, or Phantom.');
+  const provider = getEthereumProvider();
+  if (!provider) {
+    throw new Error('No EVM wallet detected. Please connect an EVM wallet.');
   }
 
   return createWalletClient({
     account,
     chain: monadTestnet,
-    transport: custom(window.ethereum),
+    transport: custom(provider),
   });
 }

@@ -8,6 +8,9 @@ import {
 } from '../config/network';
 import {
   getEthereumProvider,
+  setActiveEthereumProvider,
+  clearActiveEthereumProvider,
+  getActiveWalletName,
   parseChainId,
   requestSwitchOrAddMonadTestnet,
   WalletError,
@@ -29,8 +32,13 @@ export interface MonadWalletContextType {
   isConnecting: boolean;
   isSwitching: boolean;
   status: WalletStatus | null;
+  isConnectModalOpen: boolean;
+  openConnectModal: () => void;
+  closeConnectModal: () => void;
   connectWallet: () => Promise<void>;
-  switchToMonadTestnet: () => Promise<boolean>;
+  connectWithProvider: (provider: any, walletName?: string, walletId?: string) => Promise<boolean>;
+  connectedWalletName: string | null;
+  switchToMonadTestnet: (targetProvider?: any) => Promise<boolean>;
   ensureMonadNetwork: () => Promise<boolean>;
   disconnectWallet: () => void;
   clearStatus: () => void;
@@ -46,6 +54,8 @@ function useMonadWalletInternal(): MonadWalletContextType {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const [status, setStatus] = useState<WalletStatus | null>(null);
+  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [connectedWalletName, setConnectedWalletName] = useState<string | null>(() => getActiveWalletName());
 
   const accountRef = useRef<string | null>(account);
   useEffect(() => {
@@ -170,79 +180,19 @@ function useMonadWalletInternal(): MonadWalletContextType {
     };
   }, [syncWalletState, refreshBalance]);
 
-  /**
-   * Connects the wallet using standard eth_requestAccounts.
-   * If on a different network, prompts for network switch with user confirmation.
-   */
-  const connectWallet = async () => {
-    // Clear manual disconnect flag since user explicitly clicked Connect
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem(DISCONNECTED_STORAGE_KEY);
-      } catch {
-        // ignore storage error
-      }
-    }
+  const openConnectModal = useCallback(() => {
+    setIsConnectModalOpen(true);
+  }, []);
 
-    const provider = getEthereumProvider();
-    if (!provider) {
-      setStatus({
-        type: 'error',
-        message: 'No EVM wallet detected. Please install MetaMask, Rabby, or Phantom.',
-      });
-      return;
-    }
-
-    setIsConnecting(true);
-    setStatus({ type: 'info', message: 'Connecting wallet... Please approve in your wallet.' });
-
-    try {
-      const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[];
-      if (accounts && accounts.length > 0) {
-        setAccount(accounts[0]);
-        refreshBalance(accounts[0]);
-
-        const chainHex = await provider.request({ method: 'eth_chainId' });
-        const currentChainId = parseChainId(chainHex);
-        setChainId(currentChainId);
-
-        if (currentChainId === MONAD_TESTNET_CHAIN_ID_DECIMAL) {
-          setStatus({
-            type: 'success',
-            message: `Connected: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)} on Monad Testnet.`,
-          });
-        } else {
-          setStatus({
-            type: 'warning',
-            message: 'Wallet connected on another network. Prompting to switch to Monad Testnet...',
-          });
-          // Initiate switch prompt
-          await switchToMonadTestnet();
-        }
-      }
-    } catch (err) {
-      const error = err as WalletError;
-      if (error.code === 4001) {
-        setStatus({
-          type: 'warning',
-          message: 'Connection request was rejected in your wallet.',
-        });
-      } else {
-        setStatus({
-          type: 'error',
-          message: `Connection failed: ${error.message || 'Unknown error'}`,
-        });
-      }
-    } finally {
-      setIsConnecting(false);
-    }
-  };
+  const closeConnectModal = useCallback(() => {
+    setIsConnectModalOpen(false);
+  }, []);
 
   /**
    * Prompts the wallet to switch or add Monad Testnet.
    * Shows wallet confirmation UI and handles approval/rejection.
    */
-  const switchToMonadTestnet = async (): Promise<boolean> => {
+  const switchToMonadTestnet = useCallback(async (targetProvider?: any): Promise<boolean> => {
     setIsSwitching(true);
     setStatus({
       type: 'info',
@@ -250,7 +200,7 @@ function useMonadWalletInternal(): MonadWalletContextType {
     });
 
     try {
-      const result = await requestSwitchOrAddMonadTestnet();
+      const result = await requestSwitchOrAddMonadTestnet(targetProvider);
 
       if (result.success) {
         await syncWalletState();
@@ -269,7 +219,95 @@ function useMonadWalletInternal(): MonadWalletContextType {
     } finally {
       setIsSwitching(false);
     }
-  };
+  }, [syncWalletState]);
+
+  /**
+   * Connects to a specific selected provider (from the wallet modal).
+   */
+  const connectWithProvider = useCallback(
+    async (provider: any, walletName?: string, walletId?: string): Promise<boolean> => {
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem(DISCONNECTED_STORAGE_KEY);
+        } catch {
+          // ignore storage error
+        }
+      }
+
+      if (!provider) {
+        setStatus({
+          type: 'error',
+          message: `Could not connect to ${walletName || 'wallet'}. Provider is not available.`,
+        });
+        return false;
+      }
+
+      setIsConnecting(true);
+      setStatus({
+        type: 'info',
+        message: `Connecting ${walletName || 'wallet'}... Please approve in your wallet.`,
+      });
+
+      try {
+        setActiveEthereumProvider(provider, walletName, walletId);
+        if (walletName) {
+          setConnectedWalletName(walletName);
+        }
+
+        const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[];
+        if (accounts && accounts.length > 0) {
+          setAccount(accounts[0]);
+          refreshBalance(accounts[0]);
+
+          const chainHex = await provider.request({ method: 'eth_chainId' });
+          const currentChainId = parseChainId(chainHex);
+          setChainId(currentChainId);
+
+          if (currentChainId === MONAD_TESTNET_CHAIN_ID_DECIMAL) {
+            setStatus({
+              type: 'success',
+              message: `Connected: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)} via ${walletName || 'wallet'}.`,
+            });
+          } else {
+            setStatus({
+              type: 'warning',
+              message: 'Wallet connected on another network. Prompting to switch to Monad Testnet...',
+            });
+            await switchToMonadTestnet(provider);
+          }
+
+          setIsConnectModalOpen(false);
+          return true;
+        }
+        return false;
+      } catch (err) {
+        const error = err as WalletError;
+        if (error.code === 4001) {
+          setStatus({
+            type: 'warning',
+            message: `Connection request was rejected in ${walletName || 'your wallet'}.`,
+          });
+        } else {
+          setStatus({
+            type: 'error',
+            message: `Connection failed: ${error.message || 'Unknown error'}`,
+          });
+        }
+        return false;
+      } finally {
+        setIsConnecting(false);
+      }
+    },
+    [refreshBalance, switchToMonadTestnet]
+  );
+
+  /**
+   * Default Connect action called by the Connect Wallet button.
+   * Instead of immediately triggering MetaMask, opens the multi-wallet selection modal.
+   */
+  const connectWallet = useCallback(async () => {
+    setIsConnectModalOpen(true);
+  }, []);
 
   /**
    * Guard function: ensures that Monad Testnet is selected and confirmed
@@ -279,6 +317,7 @@ function useMonadWalletInternal(): MonadWalletContextType {
   const ensureMonadNetwork = async (): Promise<boolean> => {
     const provider = getEthereumProvider();
     if (!provider) {
+      setIsConnectModalOpen(true);
       setStatus({
         type: 'error',
         message: 'Wallet not detected. Monad Testnet wallet is required for escrow transactions.',
@@ -286,37 +325,26 @@ function useMonadWalletInternal(): MonadWalletContextType {
       return false;
     }
 
-    // If not connected, connect first
+    // If not connected, open wallet selection modal
     if (!account) {
-      await connectWallet();
-      const accounts = (await provider.request({ method: 'eth_accounts' })) as string[];
-      if (!accounts || accounts.length === 0) {
-        return false;
-      }
+      setIsConnectModalOpen(true);
+      return false;
     }
 
     // Verify chain ID
     const chainHex = await provider.request({ method: 'eth_chainId' });
     const currentChainId = parseChainId(chainHex);
 
-    if (currentChainId === MONAD_TESTNET_CHAIN_ID_DECIMAL) {
-      return true;
+    if (currentChainId !== MONAD_TESTNET_CHAIN_ID_DECIMAL) {
+      const switchSuccess = await switchToMonadTestnet(provider);
+      if (!switchSuccess) {
+        return false;
+      }
     }
 
-    // Not on Monad Testnet: prompt switch
-    setStatus({
-      type: 'warning',
-      message: 'Monad Testnet required for this transaction. Please confirm the switch in your wallet.',
-    });
-
-    const switched = await switchToMonadTestnet();
-    if (!switched) {
-      return false;
-    }
-
-    // Double check confirmation post-switch
-    const postSwitchChainHex = await provider.request({ method: 'eth_chainId' });
-    const confirmedChainId = parseChainId(postSwitchChainHex);
+    // Final verification
+    const confirmedChainHex = await provider.request({ method: 'eth_chainId' });
+    const confirmedChainId = parseChainId(confirmedChainHex);
 
     if (confirmedChainId !== MONAD_TESTNET_CHAIN_ID_DECIMAL) {
       setStatus({
@@ -330,7 +358,7 @@ function useMonadWalletInternal(): MonadWalletContextType {
   };
 
   const disconnectWallet = useCallback(() => {
-    // 1. Mark as manually disconnected in storage so auto-sync does not re-connect on refresh or re-render
+    // 1. Mark as manually disconnected in storage
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(DISCONNECTED_STORAGE_KEY, 'true');
@@ -339,14 +367,18 @@ function useMonadWalletInternal(): MonadWalletContextType {
       }
     }
 
-    // 2. Clear all local account, balance, and operational states immediately
+    // 2. Clear provider reference
+    clearActiveEthereumProvider();
+    setConnectedWalletName(null);
+
+    // 3. Clear all local account, balance, and operational states immediately
     setAccount(null);
     setBalanceMon(null);
     setBalanceWei(null);
     setIsConnecting(false);
     setIsSwitching(false);
 
-    // 3. Clear status or set clean notification
+    // 4. Set clean notification
     setStatus({
       type: 'info',
       message: 'Wallet disconnected.',
@@ -364,7 +396,12 @@ function useMonadWalletInternal(): MonadWalletContextType {
     isConnecting,
     isSwitching,
     status,
+    isConnectModalOpen,
+    openConnectModal,
+    closeConnectModal,
     connectWallet,
+    connectWithProvider,
+    connectedWalletName,
     switchToMonadTestnet,
     ensureMonadNetwork,
     disconnectWallet,
@@ -386,4 +423,3 @@ export function useMonadWallet(): MonadWalletContextType {
   }
   return useMonadWalletInternal();
 }
-

@@ -1,0 +1,544 @@
+/* ========================================================================= */
+/* HERO VISUAL - CINEMATIC 3D WEB3 PRODUCT RENDER                            */
+/* ========================================================================= */
+
+.visualContainer {
+  position: relative;
+  width: 100%;
+  min-height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  z-index: 3;
+}
+
+.sceneWrapper {
+  position: relative;
+  width: 100%;
+  max-width: 1080px;
+  aspect-ratio: 1000 / 680;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.sceneSvgBack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  z-index: 1;
+}
+
+.sceneSvgFront {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* ========================================================================= */
+/* 3D SETTLEX LOGO (PHYSICALLY ENCLOSED INSIDE CRYSTAL CHAMBER)              */
+/* ========================================================================= */
+
+.floatingLogoWrapper {
+  position: absolute;
+  left: 50%;
+  top: 39%;
+  transform: translate(-50%, -50%);
+  width: 21%;
+  max-width: 215px;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 4;
+  animation: logoChamberLevitate 6.5s ease-in-out infinite;
+}
+
+@keyframes logoChamberLevitate {
+  0%, 100% {
+    transform: translate(-50%, -50%) translateY(0);
+  }
+  50% {
+    transform: translate(-50%, -50%) translateY(-8px);
+  }
+}
+
+.internalLogoImage {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: screen;
+  filter:
+    drop-shadow(0 0 25px rgba(168, 85, 247, 0.95))
+    drop-shadow(0 0 55px rgba(124, 77, 255, 0.75));
+}
+
+/* ========================================================================= */
+/* 3D SCENE ANIMATIONS & LEVITATION KEYFRAMES                                */
+/* ========================================================================= */
+
+.cubeLevitationGroup {
+  animation: crystalLevitation 6.5s ease-in-out infinite;
+  transform-origin: 500px 265px;
+}
+
+@keyframes crystalLevitation {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.settlex3DLogoGroup {
+  animation: logoCorePulse 5s ease-in-out infinite;
+  transform-origin: 500px 265px;
+}
+
+@keyframes logoCorePulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 16px rgba(168, 85, 247, 0.7));
+  }
+  50% {
+    filter: drop-shadow(0 0 32px rgba(192, 132, 252, 0.95))
+            drop-shadow(0 0 55px rgba(124, 77, 255, 0.75));
+  }
+}
+
+.monolithPlatform {
+  animation: platformBreathing 8s ease-in-out infinite;
+  transform-origin: 500px 540px;
+}
+
+@keyframes platformBreathing {
+  0%, 100% {
+    filter: drop-shadow(0 0 25px rgba(147, 51, 234, 0.45));
+  }
+  50% {
+    filter: drop-shadow(0 0 45px rgba(168, 85, 247, 0.75));
+  }
+}
+
+.travellingOrb {
+  animation: orbFlicker 3s ease-in-out infinite;
+}
+
+@keyframes orbFlicker {
+  0%, 100% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+/* ========================================================================= */
+/* 4 FLOATING CINEMATIC 3D GLASS PROTOCOL NODES (MATCHING REFERENCE IMAGE)  */
+/* ========================================================================= */
+
+.workflowCard {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(92px, 10.2vw, 114px);
+  aspect-ratio: 1;
+  border-radius: 22px;
+  background: linear-gradient(
+    140deg,
+    rgba(32, 22, 68, 0.48) 0%,
+    rgba(16, 12, 38, 0.65) 48%,
+    rgba(8, 6, 20, 0.84) 100%
+  );
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  cursor: pointer;
+  z-index: 10;
+  padding: 0;
+  border: 1.5px solid rgba(192, 132, 252, 0.55);
+  box-shadow:
+    0 20px 42px -10px rgba(0, 0, 0, 0.88),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.45),
+    inset 1px 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -2px 3px 0 rgba(0, 0, 0, 0.7);
+  transition:
+    transform 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.28s ease,
+    background 0.28s ease;
+  overflow: visible;
+}
+
+/* Card Interior Content Container */
+.cardContent {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+/* Volumetric Atmospheric Halo Behind Each Card */
+.volumetricHalo {
+  position: absolute;
+  inset: -14px;
+  border-radius: 28px;
+  filter: blur(20px);
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: -1;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.workflowCard:hover .volumetricHalo {
+  opacity: 0.95;
+  transform: scale(1.12);
+}
+
+/* Specular Light Reflection Sheen Across Glass Face */
+.specularShine {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 35% 8%,
+    rgba(255, 255, 255, 0.38) 0%,
+    rgba(255, 255, 255, 0.1) 28%,
+    transparent 65%
+  );
+  mix-blend-mode: overlay;
+  z-index: 1;
+}
+
+/* Inner Glass Bevel & Atmospheric Depth */
+.innerGlassGleam {
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.12) 0%,
+    transparent 45%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+  z-index: 1;
+}
+
+/* Icon Wrap (Unified Float - No nested opaque square box) */
+.cardIconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  transition: transform 0.25s ease;
+}
+
+.workflowCard:hover .cardIconWrap {
+  transform: translateY(-2px) scale(1.08);
+}
+
+/* Settle Circular Protocol Ring Matching Reference Image */
+.settleIconBadge {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1.6px solid #34d399;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(52, 211, 153, 0.22) 0%,
+    rgba(16, 185, 129, 0.08) 70%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 12px rgba(52, 211, 153, 0.5),
+    inset 0 0 8px rgba(52, 211, 153, 0.3);
+}
+
+.nodeIcon {
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.nodeLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: -0.01em;
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9), 0 0 12px rgba(168, 85, 247, 0.4);
+}
+
+/* ------------------------------------------------------------------------- */
+/* CARD POSITIONS & SPECIALIZED NEON GLOWS MATCHING REFERENCE               */
+/* ------------------------------------------------------------------------- */
+
+/* CREATE (Top Left) */
+.cardCreate {
+  top: 15%;
+  left: 9%;
+  transform: perspective(900px) rotateY(5deg) rotateX(2deg);
+  border-color: rgba(216, 180, 254, 0.75);
+  box-shadow:
+    0 20px 42px -10px rgba(0, 0, 0, 0.85),
+    0 0 28px rgba(168, 85, 247, 0.42),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 3px 0 rgba(0, 0, 0, 0.7);
+  animation: floatCreateNode 7.5s ease-in-out infinite;
+}
+
+.cardCreate:hover {
+  transform: perspective(900px) translateY(-6px) scale(1.06);
+  border-color: rgba(243, 232, 255, 0.95);
+  box-shadow:
+    0 26px 54px -10px rgba(0, 0, 0, 0.9),
+    0 0 46px rgba(192, 132, 252, 0.75),
+    0 0 16px rgba(255, 255, 255, 0.4),
+    inset 0 2px 2px 0 rgba(255, 255, 255, 0.7);
+}
+
+.cardCreate .volumetricHalo {
+  background: radial-gradient(circle at 50% 50%, rgba(192, 132, 252, 0.55) 0%, rgba(147, 51, 234, 0.22) 50%, transparent 75%);
+}
+
+.cardCreate .nodeIcon {
+  color: #f3e8ff;
+  filter: drop-shadow(0 0 8px rgba(216, 180, 254, 0.85)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.9));
+}
+
+/* FUND (Bottom Left) */
+.cardFund {
+  bottom: 18%;
+  left: 6%;
+  transform: perspective(900px) rotateY(4deg) rotateX(-2deg);
+  border-color: rgba(192, 132, 252, 0.7);
+  box-shadow:
+    0 20px 42px -10px rgba(0, 0, 0, 0.85),
+    0 0 28px rgba(147, 51, 234, 0.42),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 3px 0 rgba(0, 0, 0, 0.7);
+  animation: floatFundNode 8s ease-in-out infinite 1.8s;
+}
+
+.cardFund:hover {
+  transform: perspective(900px) translateY(-6px) scale(1.06);
+  border-color: rgba(233, 213, 255, 0.95);
+  box-shadow:
+    0 26px 54px -10px rgba(0, 0, 0, 0.9),
+    0 0 46px rgba(168, 85, 247, 0.75),
+    0 0 16px rgba(255, 255, 255, 0.4),
+    inset 0 2px 2px 0 rgba(255, 255, 255, 0.7);
+}
+
+.cardFund .volumetricHalo {
+  background: radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.55) 0%, rgba(126, 34, 206, 0.22) 50%, transparent 75%);
+}
+
+.cardFund .nodeIcon {
+  color: #e9d5ff;
+  filter: drop-shadow(0 0 8px rgba(192, 132, 252, 0.85)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.9));
+}
+
+/* WORK (Top Right) */
+.cardWork {
+  top: 15%;
+  right: 12%;
+  transform: perspective(900px) rotateY(-5deg) rotateX(2deg);
+  border-color: rgba(165, 180, 252, 0.75);
+  box-shadow:
+    0 20px 42px -10px rgba(0, 0, 0, 0.85),
+    0 0 28px rgba(129, 140, 248, 0.42),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 3px 0 rgba(0, 0, 0, 0.7);
+  animation: floatWorkNode 7.8s ease-in-out infinite 0.9s;
+}
+
+.cardWork:hover {
+  transform: perspective(900px) translateY(-6px) scale(1.06);
+  border-color: rgba(224, 231, 255, 0.95);
+  box-shadow:
+    0 26px 54px -10px rgba(0, 0, 0, 0.9),
+    0 0 46px rgba(129, 140, 248, 0.75),
+    0 0 16px rgba(255, 255, 255, 0.4),
+    inset 0 2px 2px 0 rgba(255, 255, 255, 0.7);
+}
+
+.cardWork .volumetricHalo {
+  background: radial-gradient(circle at 50% 50%, rgba(129, 140, 248, 0.55) 0%, rgba(99, 102, 241, 0.22) 50%, transparent 75%);
+}
+
+.cardWork .nodeIcon {
+  color: #e0e7ff;
+  filter: drop-shadow(0 0 8px rgba(165, 180, 252, 0.85)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.9));
+}
+
+/* SETTLE (Bottom Right - Signature Emerald Protocol) */
+.cardSettle {
+  bottom: 18%;
+  right: 9%;
+  transform: perspective(900px) rotateY(-4deg) rotateX(-2deg);
+  border-color: rgba(52, 211, 153, 0.85);
+  box-shadow:
+    0 20px 42px -10px rgba(0, 0, 0, 0.85),
+    0 0 32px rgba(16, 185, 129, 0.52),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -2px 3px 0 rgba(0, 0, 0, 0.7);
+  animation: floatSettleNode 8.2s ease-in-out infinite 2.5s;
+}
+
+.cardSettle:hover {
+  transform: perspective(900px) translateY(-6px) scale(1.06);
+  border-color: rgba(167, 243, 208, 1);
+  box-shadow:
+    0 26px 54px -10px rgba(0, 0, 0, 0.9),
+    0 0 52px rgba(52, 211, 153, 0.85),
+    0 0 18px rgba(255, 255, 255, 0.5),
+    inset 0 2px 2px 0 rgba(255, 255, 255, 0.75);
+}
+
+.cardSettle .volumetricHalo {
+  background: radial-gradient(circle at 50% 50%, rgba(52, 211, 153, 0.65) 0%, rgba(16, 185, 129, 0.28) 50%, transparent 75%);
+}
+
+.cardSettle .nodeIcon {
+  color: #34d399;
+  filter: drop-shadow(0 0 8px rgba(52, 211, 153, 0.95)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.9));
+}
+
+.cardSettle .nodeLabel {
+  color: #6ee7b7;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9), 0 0 12px rgba(52, 211, 153, 0.6);
+}
+
+/* Floating Animations for the 4 HUD Nodes */
+@keyframes floatCreateNode {
+  0%, 100% {
+    transform: perspective(900px) rotateY(5deg) rotateX(2deg) translateY(0);
+  }
+  50% {
+    transform: perspective(900px) rotateY(5deg) rotateX(2deg) translateY(-6px);
+  }
+}
+
+@keyframes floatFundNode {
+  0%, 100% {
+    transform: perspective(900px) rotateY(4deg) rotateX(-2deg) translateY(0);
+  }
+  50% {
+    transform: perspective(900px) rotateY(4deg) rotateX(-2deg) translateY(-7px);
+  }
+}
+
+@keyframes floatWorkNode {
+  0%, 100% {
+    transform: perspective(900px) rotateY(-5deg) rotateX(2deg) translateY(0);
+  }
+  50% {
+    transform: perspective(900px) rotateY(-5deg) rotateX(2deg) translateY(-6px);
+  }
+}
+
+@keyframes floatSettleNode {
+  0%, 100% {
+    transform: perspective(900px) rotateY(-4deg) rotateX(-2deg) translateY(0);
+  }
+  50% {
+    transform: perspective(900px) rotateY(-4deg) rotateX(-2deg) translateY(-7px);
+  }
+}
+
+/* ========================================================================= */
+/* RESPONSIVE SCALING                                                        */
+/* ========================================================================= */
+
+@media (min-width: 1440px) {
+  .visualContainer {
+    min-height: 550px;
+  }
+}
+
+@media (min-width: 1750px) {
+  .visualContainer {
+    min-height: 600px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .visualContainer {
+    min-height: 450px;
+  }
+
+  .workflowCard {
+    width: clamp(82px, 9vw, 98px);
+  }
+
+  .nodeLabel {
+    font-size: 11.5px;
+  }
+}
+
+@media (max-width: 860px) {
+  .visualContainer {
+    min-height: 380px;
+    margin-top: 10px;
+  }
+
+  .workflowCard {
+    width: clamp(74px, 12vw, 88px);
+    border-radius: 18px;
+  }
+
+  .cardIconWrap {
+    width: 30px;
+    height: 30px;
+  }
+
+  .settleIconBadge {
+    width: 28px;
+    height: 28px;
+  }
+
+  .nodeLabel {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 580px) {
+  .visualContainer {
+    min-height: 310px;
+  }
+
+  .workflowCard {
+    width: clamp(62px, 14vw, 74px);
+    border-radius: 14px;
+  }
+
+  .cardIconWrap {
+    width: 26px;
+    height: 26px;
+  }
+
+  .settleIconBadge {
+    width: 24px;
+    height: 24px;
+  }
+
+  .nodeLabel {
+    font-size: 10px;
+  }
+}

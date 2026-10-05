@@ -1,0 +1,89 @@
+/* ========================================================================= */
+/* HERO CINEMATIC ENVIRONMENT BACKDROP                                       */
+/* ========================================================================= */
+
+.environmentRoot {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Layer 1: Volumetric Cosmic Nebula & Radial Glows */
+.nebulaGlowLayer {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1200px 700px at 72% 45%, rgba(131, 110, 249, 0.35) 0%, rgba(99, 44, 230, 0.18) 45%, rgba(20, 15, 50, 0.05) 75%, transparent 100%),
+    radial-gradient(800px 500px at 85% 28%, rgba(168, 85, 247, 0.25) 0%, rgba(124, 77, 255, 0.1) 50%, transparent 75%),
+    radial-gradient(700px 450px at 6% 40%, rgba(56, 126, 255, 0.08) 0%, rgba(99, 102, 241, 0.02) 50%, transparent 68%),
+    radial-gradient(950px 280px at 50% 92%, rgba(147, 51, 234, 0.22) 0%, transparent 70%);
+}
+
+/* Layer 2: Cosmic Starfield */
+.starfieldSvg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 65%;
+  opacity: 0.85;
+}
+
+/* Layer 3: Left Mountain Alpine Massif (Framing the Left Edge) */
+.leftMountainSvg {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: clamp(180px, 16vw, 280px);
+  height: clamp(340px, 36vw, 540px);
+  opacity: 0.88;
+  mask-image: linear-gradient(to right, black 35%, transparent 95%),
+              linear-gradient(to top, black 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 35%, transparent 95%),
+                      linear-gradient(to top, black 70%, transparent 100%);
+  filter: drop-shadow(0 0 35px rgba(124, 77, 255, 0.25));
+}
+
+/* Layer 4: Horizon Mountain Range */
+.horizonMountainSvg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 200px;
+  opacity: 0.55;
+}
+
+/* Layer 5: Right Mountain Peaks & Monumental Portal Arch */
+.rightEnvironmentCluster {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: clamp(380px, 45vw, 820px);
+  height: clamp(380px, 42vw, 640px);
+  pointer-events: none;
+  opacity: 0.9;
+  mask-image: linear-gradient(to left, black 65%, transparent 100%),
+              linear-gradient(to top, black 75%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to left, black 65%, transparent 100%),
+                      linear-gradient(to top, black 75%, transparent 100%);
+}
+
+.rightClusterSvg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Layer 6: Seamless Bottom Fade */
+.bottomSeamlessFade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 90px;
+  background: linear-gradient(to top, #07080d 0%, rgba(7, 8, 13, 0.7) 50%, transparent 100%);
+}

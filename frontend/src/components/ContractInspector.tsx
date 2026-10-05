@@ -1,0 +1,1575 @@
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import Image from 'next/image';
+import { isAddress } from 'viem';
+import { useSettleXBounty } from '../hooks/useSettleXBounty';
+import { useMonadWallet } from '../hooks/useMonadWallet';
+import {
+  SETTLEX_BOUNTY_ADDRESS,
+  getExplorerTxUrl,
+  getExplorerAddressUrl,
+} from '../config/contract';
+import { BountyState } from '../contracts/types';
+import { Icon } from './Icons';
+import styles from './ContractInspector.module.css';
+
+type ActiveTab = 'manage' | 'create';
+type ExploreView = 'active' | 'completed';
+type SortOption = 'reward' | 'deadline' | 'capacity' | 'newest';
+
+export interface ContractInspectorProps {
+  viewMode?: 'home-stats' | 'bounties' | 'create' | 'all';
+  externalTab?: ActiveTab;
+  onTabChange?: (tab: ActiveTab) => void;
+  myBountiesOnly?: boolean;
+  onNavigateHome?: () => void;
+  onNavigateCreate?: () => void;
+  onNavigateExplore?: () => void;
+}
+
+export function ContractInspector({
+  viewMode = 'all',
+  externalTab,
+  onTabChange,
+  myBountiesOnly = false,
+  onNavigateHome,
+  onNavigateCreate,
+  onNavigateExplore,
+}: ContractInspectorProps) {
+  const wallet = useMonadWallet();
+  const {
+    isBountyDeployed,
+    activeBounty,
+    submissions,
+    allBounties,
+    isLoadingAllBounties,
+    isLoadingBounty,
+    nextBountyId,
+    txState,
+    currentRole,
+    isCreator,
+    isArbiter,
+    userHasSubmitted,
+    claimableReward,
+    loadBounty,
+    loadAllBounties,
+    refreshNextBountyId,
+    handleCreateBounty,
+    handleSubmitWork,
+    handleCloseSubmissions,
+    handleSelectWinner,
+    handleEscalateToDispute,
+    handleResolveDispute,
+    handleClaimRefund,
+    handleClaimReward,
+    resetTxState,
+  } = useSettleXBounty();
+
+  const [activeTab, setActiveTabInternal] = useState<ActiveTab>(
+    viewMode === 'create' ? 'create' : 'manage'
+  );
+  const [exploreView, setExploreView] = useState<ExploreView>('active');
+  const [selectedBountyId, setSelectedBountyId] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortOption, setSortOption] = useState<SortOption>('reward');
+  const [lookupBountyId, setLookupBountyId] = useState<string>('');
+  const [readError, setReadError] = useState<string | null>(null);
+
+  // Sync with external tab or viewMode if provided
+  useEffect(() => {
+    if (viewMode === 'create') {
+      setActiveTabInternal('create');
+    } else if (viewMode === 'bounties') {
+      setActiveTabInternal('manage');
+    } else if (externalTab) {
+      setActiveTabInternal(externalTab);
+    }
+  }, [viewMode, externalTab]);
+
+  const setActiveTab = (tab: ActiveTab) => {
+    setActiveTabInternal(tab);
+    onTabChange?.(tab);
+  };
+
+  // Form: Create Bounty State
+  const [formTitle, setFormTitle] = useState('');
+  const [formDescription, setFormDescription] = useState('');
+  const [formCriteria, setFormCriteria] = useState('');
+  const [formRewardMon, setFormRewardMon] = useState('0.1');
+  const [formMaxSubmissions, setFormMaxSubmissions] = useState('5');
+  const [formDurationHours, setFormDurationHours] = useState('48');
+  const [formDisputeResolver, setFormDisputeResolver] = useState('');
+  const [formValidationError, setFormValidationError] = useState<string | null>(null);
+
+  // Contributor Submit Work Form
+  const [submissionProofUri, setSubmissionProofUri] = useState('');
+  const [submissionNotes, setSubmissionNotes] = useState('');
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+
+  // Live countdown timer state
+  const [currentTime, setCurrentTime] = useState<number>(Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Fetch all bounties on mount
+  useEffect(() => {
+    if (isBountyDeployed) {
+      refreshNextBountyId();
+      loadAllBounties().catch(() => {});
+    }
+  }, [isBountyDeployed, loadAllBounties, refreshNextBountyId]);
+
+  // Open detail view for a specific bounty
+  const handleViewBounty = async (bountyId: number) => {
+    setSelectedBountyId(bountyId);
+    setReadError(null);
+    try {
+      await loadBounty(bountyId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setReadError(`Failed to load Bounty #${bountyId}: ${msg}`);
+    }
+  };
+
+  // Back to Explore list
+  const handleBackToList = () => {
+    setSelectedBountyId(null);
+    setReadError(null);
+  };
+
+  // Search submit handler
+  const handleSearchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) return;
+
+    const id = parseInt(query, 10);
+    if (!isNaN(id) && id > 0) {
+      handleViewBounty(id);
+    }
+  };
+
+  // Direct lookup handler in detail view
+  const handleLookup = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setReadError(null);
+    const id = parseInt(lookupBountyId, 10);
+    if (isNaN(id) || id <= 0) {
+      setReadError('Please enter a valid bounty ID.');
+      return;
+    }
+
+    try {
+      setSelectedBountyId(id);
+      await loadBounty(id);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('BountyDoesNotExist') || msg.includes('revert')) {
+        setReadError(`Bounty #${id} does not exist yet.`);
+      } else {
+        setReadError(`Failed to fetch Bounty #${id}: ${msg}`);
+      }
+    }
+  };
+
+  // Live Protocol Statistics derived from real onchain data
+  const stats = useMemo(() => {
+    let locked = 0;
+    let paidOut = 0;
+    let active = 0;
+    let completed = 0;
+
+    for (const b of allBounties) {
+      const reward = parseFloat(b.rewardMon) || 0;
+      if (
+        b.state === BountyState.Open ||
+        b.state === BountyState.Reviewing ||
+        b.state === BountyState.DisputeReview
+      ) {
+        locked += reward;
+        active += 1;
+      } else if (b.state === BountyState.Settled) {
+        paidOut += reward;
+        completed += 1;
+      } else if (b.state === BountyState.Refunded) {
+        completed += 1;
+      }
+    }
+
+    return {
+      totalLocked: allBounties.length > 0 ? `${locked.toFixed(2)} MON` : '—',
+      activeCount: allBounties.length > 0 ? String(active) : '—',
+      completedCount: allBounties.length > 0 ? String(completed) : '—',
+      totalPaidOut: allBounties.length > 0 ? `${paidOut.toFixed(2)} MON` : '—',
+    };
+  }, [allBounties]);
+
+  // Filtered lists for Active and Completed
+  const activeBountiesList = useMemo(() => {
+    let list = allBounties.filter(
+      (b) =>
+        b.state === BountyState.Open ||
+        b.state === BountyState.Reviewing ||
+        b.state === BountyState.DisputeReview
+    );
+    if (myBountiesOnly && wallet.account) {
+      const acc = wallet.account.toLowerCase();
+      list = list.filter((b) => b.creator.toLowerCase() === acc);
+    }
+    return list;
+  }, [allBounties, myBountiesOnly, wallet.account]);
+
+  const completedBountiesList = useMemo(() => {
+    let list = allBounties.filter(
+      (b) =>
+        b.state === BountyState.Settled ||
+        b.state === BountyState.Refunded
+    );
+    if (myBountiesOnly && wallet.account) {
+      const acc = wallet.account.toLowerCase();
+      list = list.filter((b) => b.creator.toLowerCase() === acc);
+    }
+    return list;
+  }, [allBounties, myBountiesOnly, wallet.account]);
+
+  // Current list filtered by search and sorted
+  const displayedBounties = useMemo(() => {
+    const list = exploreView === 'active' ? activeBountiesList : completedBountiesList;
+    const query = searchQuery.toLowerCase().trim();
+
+    const filtered = list.filter((b) => {
+      if (!query) return true;
+      return (
+        b.taskTitle.toLowerCase().includes(query) ||
+        b.taskMetadataUri.toLowerCase().includes(query) ||
+        b.acceptanceCriteria.toLowerCase().includes(query) ||
+        String(b.bountyId) === query ||
+        b.creator.toLowerCase().includes(query)
+      );
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortOption === 'reward') {
+        return parseFloat(b.rewardMon) - parseFloat(a.rewardMon);
+      }
+      if (sortOption === 'deadline') {
+        return a.submissionDeadlineTimestamp - b.submissionDeadlineTimestamp;
+      }
+      if (sortOption === 'capacity') {
+        return b.slotsRemaining - a.slotsRemaining;
+      }
+      if (sortOption === 'newest') {
+        return b.bountyId - a.bountyId;
+      }
+      return 0;
+    });
+  }, [exploreView, activeBountiesList, completedBountiesList, searchQuery, sortOption]);
+
+  // 80/20 Reward calculation preview
+  const parsedReward = parseFloat(formRewardMon) || 0;
+  const winnerPreviewMon = (parsedReward * 0.8).toFixed(4);
+  const poolPreviewMon = (parsedReward * 0.2).toFixed(4);
+
+  // Submission deadline remaining
+  const formatCountdown = (deadlineTimestamp: number) => {
+    const diff = deadlineTimestamp - currentTime;
+    if (diff <= 0) return 'Expired';
+    const hours = Math.floor(diff / 3600);
+    const minutes = Math.floor((diff % 3600) / 60);
+    const seconds = diff % 60;
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      return `${days}d ${hours % 24}h remaining`;
+    }
+    return `${hours}h ${minutes}m ${seconds}s remaining`;
+  };
+
+  // Submit Work Handler
+  const onSubmitWork = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeBounty) return;
+    if (!submissionProofUri.trim()) {
+      alert('Please provide a valid work/proof URI.');
+      return;
+    }
+
+    const res = await handleSubmitWork({
+      bountyId: activeBounty.bountyId,
+      proofUri: submissionProofUri.trim(),
+      notes: submissionNotes.trim(),
+    });
+
+    if (res.success) {
+      setShowSubmitModal(false);
+      setSubmissionProofUri('');
+      setSubmissionNotes('');
+    }
+  };
+
+  // Create Bounty Handler
+  const onCreateBounty = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormValidationError(null);
+
+    if (!formTitle.trim()) {
+      setFormValidationError('Please enter a task title.');
+      return;
+    }
+    if (!formCriteria.trim()) {
+      setFormValidationError('Please define immutable acceptance criteria.');
+      return;
+    }
+
+    const reward = parseFloat(formRewardMon);
+    if (isNaN(reward) || reward <= 0) {
+      setFormValidationError('Please enter a valid MON reward amount.');
+      return;
+    }
+
+    const maxSubs = parseInt(formMaxSubmissions, 10);
+    if (isNaN(maxSubs) || maxSubs < 1 || maxSubs > 10) {
+      setFormValidationError('Maximum submissions must be between 1 and 10.');
+      return;
+    }
+
+    const hours = parseFloat(formDurationHours);
+    if (isNaN(hours) || hours <= 0) {
+      setFormValidationError('Please enter a valid duration in hours.');
+      return;
+    }
+
+    let resolverAddr: `0x${string}` = '0x0000000000000000000000000000000000000000';
+    if (formDisputeResolver.trim()) {
+      if (!isAddress(formDisputeResolver.trim())) {
+        setFormValidationError('Invalid dispute resolver address.');
+        return;
+      }
+      resolverAddr = formDisputeResolver.trim() as `0x${string}`;
+    }
+
+    const durationSeconds = Math.floor(hours * 3600);
+
+    const res = await handleCreateBounty({
+      taskTitle: formTitle.trim(),
+      taskMetadataUri: formDescription.trim(),
+      acceptanceCriteria: formCriteria.trim(),
+      maxSubmissions: maxSubs,
+      durationSeconds,
+      disputeResolverAddress: resolverAddr,
+      rewardMon: formRewardMon.trim(),
+    });
+
+    if (res.success) {
+      setFormTitle('');
+      setFormDescription('');
+      setFormCriteria('');
+      setFormRewardMon('0.1');
+      setFormDisputeResolver('');
+      if (onNavigateExplore) {
+        onNavigateExplore();
+      } else {
+        setActiveTab('manage');
+      }
+      setExploreView('active');
+      setSelectedBountyId(null);
+      await loadAllBounties();
+    }
+  };
+
+  // Live Protocol Stats Strip JSX
+  const statsStripElement = (
+    <section className={styles.statsStrip} aria-label="Live Protocol Statistics">
+      <div className={styles.statItem}>
+        <div className={`${styles.statIcon} ${styles.tonePurple}`}>
+          <Icon name="lock" size={20} />
+        </div>
+        <div>
+          <div className={styles.statLabel}>Total Locked</div>
+          <div className={styles.statValue}>{stats.totalLocked}</div>
+          <div className={styles.statNote}>In active bounties</div>
+        </div>
+      </div>
+
+      <div className={styles.statItem}>
+        <div className={`${styles.statIcon} ${styles.toneBlue}`}>
+          <Icon name="bounty" size={20} />
+        </div>
+        <div>
+          <div className={styles.statLabel}>Active Bounties</div>
+          <div className={styles.statValue}>{stats.activeCount}</div>
+          <div className={styles.statNote}>Open for contributions</div>
+        </div>
+      </div>
+
+      <div className={styles.statItem}>
+        <div className={`${styles.statIcon} ${styles.toneGold}`}>
+          <Icon name="trophy" size={20} />
+        </div>
+        <div>
+          <div className={styles.statLabel}>Completed Bounties</div>
+          <div className={styles.statValue}>{stats.completedCount}</div>
+          <div className={styles.statNote}>Successfully settled</div>
+        </div>
+      </div>
+
+      <div className={styles.statItem}>
+        <div className={`${styles.statIcon} ${styles.toneGreen}`}>
+          <Icon name="coins" size={20} />
+        </div>
+        <div>
+          <div className={styles.statLabel}>Total Paid Out</div>
+          <div className={styles.statValue}>{stats.totalPaidOut}</div>
+          <div className={styles.statNote}>To contributors</div>
+        </div>
+      </div>
+    </section>
+  );
+
+  // Active Transaction Notification Toast JSX
+  const txNotificationElement = txState.status !== 'idle' && (
+    <div className={`${styles.txStatus} ${styles[`txStatus_${txState.status}`]}`}>
+      <div className={styles.txStatusContent}>
+        {txState.status === 'submitting' && (
+          <>
+            <span className={styles.txSpinner} />
+            <span>Awaiting wallet signature...</span>
+          </>
+        )}
+        {txState.status === 'pending' && (
+          <>
+            <span className={styles.txSpinner} />
+            <span>Broadcasting transaction to Monad Testnet...</span>
+          </>
+        )}
+        {txState.status === 'confirmed' && (
+          <>
+            <span className={styles.txIconCheck}>✓</span>
+            <span>Transaction confirmed onchain</span>
+          </>
+        )}
+        {txState.status === 'error' && (
+          <>
+            <span className={styles.txIconError}>✕</span>
+            <span>{txState.errorMessage || 'Transaction failed.'}</span>
+          </>
+        )}
+      </div>
+
+      <div className={styles.txLinks}>
+        {txState.hash && (
+          <a
+            href={getExplorerTxUrl(txState.hash)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.txExplorerLink}
+          >
+            View on Monadscan &nearr;
+          </a>
+        )}
+        <button className={styles.txDismiss} onClick={resetTxState} title="Dismiss">
+          &times;
+        </button>
+      </div>
+    </div>
+  );
+
+  // If viewMode is 'home-stats', only render the live protocol statistics strip
+  if (viewMode === 'home-stats') {
+    return (
+      <div id="stats" className={styles.statsContainer}>
+        {txNotificationElement}
+        {statsStripElement}
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.container}>
+      {viewMode === 'all' && statsStripElement}
+
+      {/* Main Marketplace / Dedicated View Container */}
+      <div id="bounties" className={styles.marketplaceBox}>
+        {txNotificationElement}
+
+        {/* Dedicated Explore Bounties Page Header */}
+        {viewMode === 'bounties' && selectedBountyId === null && (
+          <div className={styles.explorePageHeader}>
+            <div className={styles.exploreBreadcrumb}>
+              <button
+                type="button"
+                className={styles.backButton}
+                onClick={onNavigateHome}
+                id="explore-back-home-btn"
+              >
+                <span className={styles.backArrowIcon}>&larr;</span>
+                <span>Back to Home</span>
+              </button>
+              <div className={styles.exploreNetworkBadge}>
+                <span className={styles.badgePulseDot} />
+                <span>Monad Testnet</span>
+              </div>
+            </div>
+            <div className={styles.exploreTitleArea}>
+              <h2 className={styles.explorePageTitle}>Explore Work Bounties</h2>
+              <p className={styles.explorePageSubtitle}>
+                Browse active onchain work bounties, inspect criteria, and submit deliverables for guaranteed protocol settlement.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 1: EXPLORE BOUNTIES */}
+        {/* ========================================================================= */}
+        {activeTab === 'manage' && (
+          <div className={styles.section}>
+            {/* If no specific bounty selected: Discovery List View */}
+            {selectedBountyId === null ? (
+              <div className={styles.discoveryWrapper}>
+                {/* Discovery Sub-tabs & Filter Controls */}
+                <div className={styles.discoveryHeader}>
+                  <div className={styles.subTabGroup}>
+                    <button
+                      className={`${styles.subTabButton} ${exploreView === 'active' ? styles.subTabActive : ''}`}
+                      onClick={() => setExploreView('active')}
+                    >
+                      <Icon name="bounty" size={14} />
+                      <span>Active Bounties</span>
+                      <span className={styles.countBadge}>{activeBountiesList.length}</span>
+                    </button>
+                    <button
+                      className={`${styles.subTabButton} ${exploreView === 'completed' ? styles.subTabActive : ''}`}
+                      onClick={() => setExploreView('completed')}
+                    >
+                      <Icon name="check" size={14} />
+                      <span>Completed Bounties</span>
+                      <span className={styles.countBadge}>{completedBountiesList.length}</span>
+                    </button>
+                  </div>
+
+                  {/* Search, Sort & Create Action Controls */}
+                  <div className={styles.filterControls}>
+                    <form onSubmit={handleSearchSubmit} className={styles.searchForm}>
+                      <span className={styles.searchIcon}>
+                        <Icon name="search" size={14} />
+                      </span>
+                      <input
+                        type="text"
+                        className={styles.searchInput}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search by title or bounty ID..."
+                      />
+                      {searchQuery && (
+                        <button
+                          type="button"
+                          className={styles.searchClear}
+                          onClick={() => setSearchQuery('')}
+                        >
+                          &times;
+                        </button>
+                      )}
+                    </form>
+
+                    <div className={styles.sortWrapper}>
+                      <span className={styles.sortLabel}>Sort:</span>
+                      <select
+                        className={styles.sortSelect}
+                        value={sortOption}
+                        onChange={(e) => setSortOption(e.target.value as SortOption)}
+                      >
+                        <option value="reward">Highest Reward</option>
+                        <option value="deadline">Ending Soon</option>
+                        <option value="capacity">Most Capacity</option>
+                        <option value="newest">Newest</option>
+                      </select>
+                    </div>
+
+                    <button
+                      className={styles.quickCreateBtn}
+                      onClick={() => {
+                        if (onNavigateCreate) {
+                          onNavigateCreate();
+                        } else {
+                          setActiveTab('create');
+                        }
+                        resetTxState();
+                      }}
+                      id="discovery-create-bounty-btn"
+                    >
+                      <Icon name="plus" size={13} />
+                      <span>Create Bounty</span>
+                    </button>
+
+                    {claimableReward > BigInt(0) && (
+                      <button className={styles.claimButton} onClick={() => handleClaimReward()}>
+                        Claim Pool ({(Number(claimableReward) / 1e18).toFixed(4)} MON)
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Loading State */}
+                {isLoadingAllBounties && allBounties.length === 0 && (
+                  <div className={styles.loadingDiscovery}>
+                    <span className={styles.txSpinner} />
+                    <span>Loading onchain bounties...</span>
+                  </div>
+                )}
+
+                {/* ACTIVE BOUNTIES VIEW */}
+                {exploreView === 'active' && (
+                  <>
+                    {displayedBounties.length === 0 && !isLoadingAllBounties ? (
+                      /* Reference-inspired Empty State */
+                      <div className={styles.emptyStateCard}>
+                        <div className={`${styles.emptyIcon} ${styles.tonePurple}`}>
+                          <Image
+                            src="/settlex-logo.png"
+                            alt="SettleX"
+                            width={36}
+                            height={26}
+                            priority
+                            unoptimized
+                            style={{ objectFit: 'contain' }}
+                          />
+                        </div>
+                        <div className={styles.emptyCopy}>
+                          <h2>No active bounties yet.</h2>
+                          <p>
+                            Be the first creator to publish an onchain bounty and start receiving
+                            contributions.
+                          </p>
+                          <div className={styles.emptyButtons}>
+                            <button
+                              className={styles.primaryBtnSmall}
+                              onClick={() => setActiveTab('create')}
+                            >
+                              <span>Create your first bounty</span>
+                              <Icon name="arrow" size={14} />
+                            </button>
+                            <button
+                              className={styles.secondaryBtnSmall}
+                              onClick={() => setExploreView('completed')}
+                            >
+                              Explore completed bounties
+                            </button>
+                          </div>
+                        </div>
+                        <div className={styles.emptyIllustration} aria-hidden="true">
+                          <div className={styles.docGlow}>
+                            <span />
+                            <span />
+                            <span />
+                            <b>
+                              <Icon name="plus" size={24} />
+                            </b>
+                          </div>
+                          <div className={styles.illustrationLine} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={styles.bountyGrid}>
+                        {displayedBounties.map((b) => (
+                          <div key={b.bountyId} className={styles.cardItem}>
+                            {/* Card Top: ID & State */}
+                            <div className={styles.cardItemTop}>
+                              <div className={styles.cardIdGroup}>
+                                <span className={styles.cardId}>Bounty #{b.bountyId}</span>
+                                <span className={`${styles.statusBadge} ${styles[`status_${b.state}`]}`}>
+                                  {b.stateLabel}
+                                </span>
+                              </div>
+                              <span className={styles.cardDeadline}>
+                                {b.state === BountyState.Open
+                                  ? formatCountdown(b.submissionDeadlineTimestamp)
+                                  : b.stateLabel}
+                              </span>
+                            </div>
+
+                            {/* Card Title & Description */}
+                            <div className={styles.cardItemBody}>
+                              <h3 className={styles.cardTitle}>{b.taskTitle}</h3>
+                              {b.taskMetadataUri && (
+                                <p className={styles.cardDesc}>
+                                  {b.taskMetadataUri.length > 90
+                                    ? `${b.taskMetadataUri.slice(0, 90)}...`
+                                    : b.taskMetadataUri}
+                                </p>
+                              )}
+                            </div>
+
+                            {/* 80/20 Reward Allocation Highlights */}
+                            <div className={styles.cardRewardBox}>
+                              <div className={styles.cardRewardMain}>
+                                <span className={styles.cardRewardLabel}>Reward</span>
+                                <span className={styles.cardRewardValue}>{b.rewardMon} MON</span>
+                              </div>
+                              <div className={styles.cardRewardSplits}>
+                                <div className={styles.cardSplit}>
+                                  <span className={styles.cardSplitLabel}>Winner (80%)</span>
+                                  <span className={`${styles.cardSplitValue} ${styles.winnerColor}`}>
+                                    {b.winnerMon} MON
+                                  </span>
+                                </div>
+                                <div className={styles.cardSplit}>
+                                  <span className={styles.cardSplitLabel}>Pool (20%)</span>
+                                  <span className={`${styles.cardSplitValue} ${styles.poolColor}`}>
+                                    {b.participationPoolMon} MON
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Submission Progress & Creator */}
+                            <div className={styles.cardFooter}>
+                              <div className={styles.cardMetaCol}>
+                                <span className={styles.cardMetaLabel}>Submissions</span>
+                                <div className={styles.cardProgressWrapper}>
+                                  <span className={styles.cardProgressText}>
+                                    {b.submissionCount} / {b.maxSubmissions}
+                                  </span>
+                                  <div className={styles.progressBar}>
+                                    <div
+                                      className={styles.progressFill}
+                                      style={{
+                                        width: `${(b.submissionCount / b.maxSubmissions) * 100}%`,
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className={styles.cardMetaCol}>
+                                <span className={styles.cardMetaLabel}>Creator</span>
+                                <span className={styles.cardMetaMono}>
+                                  {b.creator.slice(0, 6)}...{b.creator.slice(-4)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* CTA Button */}
+                            <button
+                              className={styles.buttonCardCta}
+                              onClick={() => handleViewBounty(b.bountyId)}
+                            >
+                              <span>View Bounty</span>
+                              <Icon name="arrow" size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* COMPLETED BOUNTIES VIEW */}
+                {exploreView === 'completed' && (
+                  <>
+                    {displayedBounties.length === 0 && !isLoadingAllBounties ? (
+                      <div className={styles.emptyDiscovery}>
+                        <div className={styles.emptyTitle}>No completed bounties yet.</div>
+                        <p className={styles.emptySubtitle}>
+                          Bounties that have been reviewed and settled will appear here.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className={styles.bountyGrid}>
+                        {displayedBounties.map((b) => (
+                          <div
+                            key={b.bountyId}
+                            className={`${styles.cardItem} ${styles.cardItemCompleted}`}
+                          >
+                            {/* Card Top: ID & Settled Badge */}
+                            <div className={styles.cardItemTop}>
+                              <div className={styles.cardIdGroup}>
+                                <span className={styles.cardId}>Bounty #{b.bountyId}</span>
+                                <span className={`${styles.statusBadge} ${styles.status_4}`}>
+                                  {b.stateLabel}
+                                </span>
+                              </div>
+                              <span className={styles.cardTimestamp}>
+                                {b.settledAtDate || 'Settled Onchain'}
+                              </span>
+                            </div>
+
+                            {/* Title */}
+                            <div className={styles.cardItemBody}>
+                              <h3 className={styles.cardTitle}>{b.taskTitle}</h3>
+                            </div>
+
+                            {/* Completed Details */}
+                            <div className={styles.completedDetailBox}>
+                              <div className={styles.completedRow}>
+                                <span className={styles.completedLabel}>Total Reward:</span>
+                                <span className={styles.completedValueBold}>{b.rewardMon} MON</span>
+                              </div>
+                              <div className={styles.completedRow}>
+                                <span className={styles.completedLabel}>Winner:</span>
+                                <span className={styles.completedValueMono}>
+                                  {b.winnerAddress
+                                    ? `${b.winnerAddress.slice(0, 6)}...${b.winnerAddress.slice(-4)}`
+                                    : b.state === BountyState.Refunded
+                                    ? 'Refunded to Creator'
+                                    : b.winnerSubmissionId > 0
+                                    ? `Submission #${b.winnerSubmissionId}`
+                                    : 'None'}
+                                </span>
+                              </div>
+                              <div className={styles.completedRow}>
+                                <span className={styles.completedLabel}>Submissions:</span>
+                                <span className={styles.completedValue}>
+                                  {b.submissionCount} Submissions
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* CTA Button */}
+                            <button
+                              className={styles.buttonCardSecondary}
+                              onClick={() => handleViewBounty(b.bountyId)}
+                            >
+                              <span>View Bounty</span>
+                              <Icon name="arrow" size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              /* DETAILED BOUNTY VIEW (Preserved existing detail logic) */
+              <div className={styles.detailWrapper}>
+                {/* Detail Navigation Header */}
+                <div className={styles.detailNav}>
+                  <button className={styles.backButton} onClick={handleBackToList}>
+                    &larr; Back to {exploreView === 'active' ? 'Active Bounties' : 'Completed Bounties'}
+                  </button>
+                  <div className={styles.detailNavRight}>
+                    <a
+                      href={getExplorerAddressUrl(SETTLEX_BOUNTY_ADDRESS)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={styles.detailContractLink}
+                      title="Inspect contract on Monadscan"
+                    >
+                      <span>Contract: {SETTLEX_BOUNTY_ADDRESS.slice(0, 6)}...{SETTLEX_BOUNTY_ADDRESS.slice(-4)}</span>
+                      <Icon name="arrow" size={12} />
+                    </a>
+                  </div>
+                </div>
+
+                {readError && <div className={styles.errorMessage}>{readError}</div>}
+
+                {isLoadingBounty ? (
+                  <div className={styles.loadingDiscovery}>
+                    <span className={styles.txSpinner} />
+                    <span>Loading Bounty #{selectedBountyId} details...</span>
+                  </div>
+                ) : activeBounty ? (
+                  <div className={styles.bountyCard}>
+                    {/* Card Header: Bounty ID, Status, Role, Countdown */}
+                    <div className={styles.bountyHeader}>
+                      <div className={styles.bountyTitleGroup}>
+                        <div className={styles.idBadgeGroup}>
+                          <span className={styles.bountyId}>Bounty #{activeBounty.bountyId}</span>
+                          <span
+                            className={`${styles.statusBadge} ${
+                              styles[`status_${activeBounty.state}`]
+                            }`}
+                          >
+                            {activeBounty.stateLabel}
+                          </span>
+                          {currentRole !== 'Observer' && (
+                            <span className={styles.roleBadge}>Role: {currentRole}</span>
+                          )}
+                        </div>
+                        <h2 className={styles.taskTitle}>{activeBounty.taskTitle}</h2>
+                        {activeBounty.taskMetadataUri && (
+                          <div className={styles.specLinkWrapper}>
+                            <span className={styles.metaLabel}>Specification:</span>
+                            <a
+                              href={
+                                activeBounty.taskMetadataUri.startsWith('http')
+                                  ? activeBounty.taskMetadataUri
+                                  : '#'
+                              }
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={styles.specLink}
+                            >
+                              {activeBounty.taskMetadataUri}
+                            </a>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className={styles.timingGroup}>
+                        {activeBounty.state === BountyState.Open && (
+                          <div className={styles.countdownBadge}>
+                            <span className={styles.timingLabel}>Deadline:</span>
+                            <span className={styles.timingValue}>
+                              {formatCountdown(activeBounty.submissionDeadlineTimestamp)}
+                            </span>
+                          </div>
+                        )}
+
+                        {activeBounty.state === BountyState.Reviewing && (
+                          <div className={`${styles.countdownBadge} ${styles.countdownReview}`}>
+                            <span className={styles.timingLabel}>Review window:</span>
+                            <span className={styles.timingValue}>
+                              {formatCountdown(activeBounty.reviewDeadlineTimestamp)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Prominent Reward & Allocation Grid */}
+                    <div className={styles.rewardGrid}>
+                      <div className={styles.rewardCardPrimary}>
+                        <span className={styles.rewardLabel}>Reward</span>
+                        <div className={styles.rewardValue}>{activeBounty.rewardMon} MON</div>
+                        <span className={styles.rewardSub}>Locked in contract</span>
+                      </div>
+
+                      <div className={styles.rewardCard}>
+                        <span className={styles.rewardLabel}>Winner allocation</span>
+                        <div className={`${styles.rewardValue} ${styles.winnerColor}`}>
+                          {activeBounty.winnerMon} MON
+                        </div>
+                        <span className={styles.rewardSub}>80% payout (+ dust)</span>
+                      </div>
+
+                      <div className={styles.rewardCard}>
+                        <span className={styles.rewardLabel}>Participation pool</span>
+                        <div className={`${styles.rewardValue} ${styles.poolColor}`}>
+                          {activeBounty.participationPoolMon} MON
+                        </div>
+                        <span className={styles.rewardSub}>20% shared by contributors</span>
+                      </div>
+                    </div>
+
+                    {/* Key Metadata Overview */}
+                    <div className={styles.metaRow}>
+                      <div className={styles.metaItem}>
+                        <span className={styles.metaLabel}>Submissions</span>
+                        <div className={styles.metaValueProgress}>
+                          <span className={styles.metaValueText}>
+                            {activeBounty.submissionCount} / {activeBounty.maxSubmissions}
+                          </span>
+                          <div className={styles.progressBar}>
+                            <div
+                              className={styles.progressFill}
+                              style={{
+                                width: `${
+                                  (activeBounty.submissionCount / activeBounty.maxSubmissions) * 100
+                                }%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={styles.metaItem}>
+                        <span className={styles.metaLabel}>Deadline</span>
+                        <span className={styles.metaValue}>
+                          {activeBounty.submissionDeadlineDate}
+                        </span>
+                      </div>
+
+                      <div className={styles.metaItem}>
+                        <span className={styles.metaLabel}>Creator</span>
+                        <span className={styles.metaValueMono}>
+                          {activeBounty.creator.slice(0, 6)}...{activeBounty.creator.slice(-4)}
+                        </span>
+                      </div>
+
+                      <div className={styles.metaItem}>
+                        <span className={styles.metaLabel}>Dispute Resolver</span>
+                        <span className={styles.metaValueMono}>
+                          {activeBounty.disputeResolver ===
+                          '0x0000000000000000000000000000000000000000'
+                            ? 'Standard'
+                            : `${activeBounty.disputeResolver.slice(0, 6)}...${activeBounty.disputeResolver.slice(-4)}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Immutable Acceptance Criteria */}
+                    <div className={styles.criteriaSection}>
+                      <div className={styles.criteriaHeader}>
+                        <span className={styles.criteriaTitle}>IMMUTABLE ACCEPTANCE CRITERIA</span>
+                        <span className={styles.criteriaTag}>Locked onchain</span>
+                      </div>
+                      <div className={styles.criteriaBody}>
+                        {activeBounty.acceptanceCriteria}
+                      </div>
+                      <p className={styles.criteriaNote}>
+                        Criteria locked onchain at creation. Creator evaluates submissions against
+                        these immutable terms. If configured, the authorized dispute resolver is
+                        also bound by these criteria.
+                      </p>
+                    </div>
+
+                    {/* Action Controls by State & Role */}
+                    <div className={styles.actionRow}>
+                      {/* Contributor: Submit Work */}
+                      {activeBounty.state === BountyState.Open &&
+                        !isCreator &&
+                        !userHasSubmitted &&
+                        activeBounty.slotsRemaining > 0 && (
+                          <button
+                            className={styles.buttonPrimary}
+                            onClick={() => setShowSubmitModal(true)}
+                          >
+                            Submit Work ({activeBounty.slotsRemaining} Slots Remaining)
+                          </button>
+                        )}
+
+                      {activeBounty.state === BountyState.Open && userHasSubmitted && (
+                        <div className={styles.eligibleNotice}>
+                          Your deliverable is submitted. Contributor reward eligibility is active.
+                        </div>
+                      )}
+
+                      {/* Close Submissions if deadline elapsed */}
+                      {activeBounty.state === BountyState.Open &&
+                        activeBounty.isSubmissionExpired && (
+                          <button
+                            className={styles.buttonSecondary}
+                            onClick={() => handleCloseSubmissions(activeBounty.bountyId)}
+                          >
+                            Close Submissions (Deadline Passed)
+                          </button>
+                        )}
+
+                      {/* Expired Zero-Submission Refund for Creator */}
+                      {activeBounty.state === BountyState.Open &&
+                        activeBounty.isSubmissionExpired &&
+                        activeBounty.submissionCount === 0 &&
+                        isCreator && (
+                          <button
+                            className={styles.buttonDanger}
+                            onClick={() => handleClaimRefund(activeBounty.bountyId)}
+                          >
+                            Reclaim Expired Bounty Deposit
+                          </button>
+                        )}
+
+                      {/* Escalate to Dispute if Creator missed 24h review window */}
+                      {activeBounty.state === BountyState.Reviewing &&
+                        activeBounty.isReviewExpired && (
+                          <button
+                            className={styles.buttonSecondary}
+                            onClick={() => handleEscalateToDispute(activeBounty.bountyId)}
+                          >
+                            Escalate to Dispute Review (Review Window Expired)
+                          </button>
+                        )}
+
+                      {/* Dispute Review Status Notice */}
+                      {activeBounty.state === BountyState.DisputeReview && (
+                        <div className={styles.disputeNotice}>
+                          <strong>Dispute Review Active:</strong> The 24-hour creator review window
+                          has expired. The authorized dispute resolver evaluates deliverables
+                          strictly against the Acceptance Criteria.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Submissions Section */}
+                    <div className={styles.submissionsSection}>
+                      <div className={styles.submissionsHeader}>
+                        <h3 className={styles.submissionsTitle}>
+                          Submissions ({submissions.length})
+                        </h3>
+                        {activeBounty.state === BountyState.Reviewing && isCreator && (
+                          <span className={styles.reviewInstruction}>
+                            Review deliverables against acceptance criteria and select the winner.
+                          </span>
+                        )}
+                      </div>
+
+                      {submissions.length === 0 ? (
+                        <div className={styles.emptySubmissions}>
+                          No submissions received yet. Eligible contributors can submit deliverables
+                          against the criteria above.
+                        </div>
+                      ) : (
+                        <div className={styles.submissionsList}>
+                          {submissions.map((sub) => {
+                            const isWinner =
+                              activeBounty.state === BountyState.Settled &&
+                              activeBounty.winnerSubmissionId === sub.submissionId;
+
+                            return (
+                              <div
+                                key={sub.submissionId}
+                                className={`${styles.submissionCard} ${
+                                  isWinner ? styles.submissionCardWinner : ''
+                                }`}
+                              >
+                                <div className={styles.submissionTop}>
+                                  <div className={styles.submissionContributor}>
+                                    <span className={styles.submissionNumber}>
+                                      #{sub.submissionId}
+                                    </span>
+                                    <span className={styles.contributorAddress}>
+                                      {sub.contributor.slice(0, 6)}...{sub.contributor.slice(-4)}
+                                    </span>
+                                    {isWinner && (
+                                      <span className={styles.winnerBadge}>
+                                        Winner (80% Payout)
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className={styles.submissionTime}>
+                                    {sub.submittedAtDate}
+                                  </span>
+                                </div>
+
+                                <div className={styles.submissionContent}>
+                                  <div className={styles.deliverableRow}>
+                                    <span className={styles.deliverableLabel}>Deliverable:</span>
+                                    <a
+                                      href={
+                                        sub.proofUri.startsWith('http') ? sub.proofUri : '#'
+                                      }
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={styles.deliverableLink}
+                                    >
+                                      {sub.proofUri}
+                                    </a>
+                                  </div>
+
+                                  {sub.notes && (
+                                    <div className={styles.submissionNotes}>
+                                      <span className={styles.notesLabel}>Notes:</span>
+                                      <p className={styles.notesText}>{sub.notes}</p>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Creator Action: Select Winner */}
+                                {activeBounty.state === BountyState.Reviewing && isCreator && (
+                                  <div className={styles.submissionAction}>
+                                    <button
+                                      className={styles.buttonSelectWinner}
+                                      onClick={() =>
+                                        handleSelectWinner(
+                                          activeBounty.bountyId,
+                                          sub.submissionId
+                                        )
+                                      }
+                                    >
+                                      Select Winner
+                                    </button>
+                                  </div>
+                                )}
+
+                                {/* Dispute Resolver Action */}
+                                {activeBounty.state === BountyState.DisputeReview && isArbiter && (
+                                  <div className={styles.submissionAction}>
+                                    <button
+                                      className={styles.buttonSelectWinner}
+                                      onClick={() =>
+                                        handleResolveDispute(
+                                          activeBounty.bountyId,
+                                          sub.submissionId
+                                        )
+                                      }
+                                    >
+                                      Select Winner (Dispute Resolution)
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className={styles.emptyCard}>
+                    <p>Bounty not found. Click &ldquo;Back to Bounties&rdquo; to return to the catalog.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 2: CREATE NEW BOUNTY */}
+        {/* ========================================================================= */}
+        {activeTab === 'create' && (
+          <div className={styles.createBountyContainer}>
+            {/* Ambient Volumetric Backdrop Glow behind Form */}
+            <div className={styles.createAmbientGlow} aria-hidden="true" />
+
+            {/* Top Navigation & Status Bar */}
+            <div className={styles.createNavHeader}>
+              <button
+                type="button"
+                className={styles.backButton}
+                onClick={() => {
+                  if (onNavigateExplore) {
+                    onNavigateExplore();
+                  } else {
+                    setActiveTab('manage');
+                  }
+                  resetTxState();
+                }}
+                id="create-back-to-bounties-btn"
+              >
+                <span className={styles.backArrowIcon}>&larr;</span>
+                <span>Back to Bounties</span>
+              </button>
+
+              <div className={styles.createHeaderBadge}>
+                <span className={styles.badgePulseDot} />
+                <span>Protected Monad Escrow</span>
+              </div>
+            </div>
+
+            {/* Page Title & Context Header */}
+            <div className={styles.createIntro}>
+              <div className={styles.createEyebrow}>
+                <span className={styles.eyebrowStar}>✦</span> NEW BOUNTY ESCROW
+              </div>
+              <h2 className={styles.createTitle}>Create a Work Bounty</h2>
+              <p className={styles.createSubtitle}>
+                Lock MON reward in escrow with immutable acceptance criteria. You have 24 hours to
+                review deliverables after submissions close.
+              </p>
+            </div>
+
+            {/* Main Glassmorphic Form Card */}
+            <form className={styles.createForm} onSubmit={onCreateBounty}>
+              {/* SECTION 1: BOUNTY DETAILS */}
+              <div className={styles.formSection}>
+                <div className={styles.sectionHeader}>
+                  <div className={styles.sectionTitleWithBadge}>
+                    <span className={styles.sectionNumber}>01</span>
+                    <h3 className={styles.sectionTitle}>Bounty Details</h3>
+                  </div>
+                </div>
+
+                <div className={styles.sectionFields}>
+                  {/* Task Title */}
+                  <div className={styles.fieldGroup}>
+                    <label className={styles.fieldLabel} htmlFor="formTitle">
+                      Task Title <span className={styles.required}>*</span>
+                    </label>
+                    <input
+                      id="formTitle"
+                      type="text"
+                      className={styles.textInput}
+                      value={formTitle}
+                      onChange={(e) => setFormTitle(e.target.value)}
+                      placeholder="e.g. Build Monad Testnet Subgraph for SettleX"
+                      required
+                    />
+                  </div>
+
+                  {/* Specification Link / Description */}
+                  <div className={styles.fieldGroup}>
+                    <label className={styles.fieldLabel} htmlFor="formDesc">
+                      Specification Link or Description
+                    </label>
+                    <input
+                      id="formDesc"
+                      type="text"
+                      className={styles.textInput}
+                      value={formDescription}
+                      onChange={(e) => setFormDescription(e.target.value)}
+                      placeholder="https://github.com/org/repo/issues/1 or specification URI"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.formDivider} />
+
+              {/* SECTION 2: ACCEPTANCE CRITERIA */}
+              <div className={styles.formSection}>
+                <div className={styles.sectionHeader}>
+                  <div className={styles.sectionTitleWithBadge}>
+                    <span className={styles.sectionNumber}>02</span>
+                    <h3 className={styles.sectionTitle}>Acceptance Criteria</h3>
+                  </div>
+                  <div className={styles.lockedOnchainBadge}>
+                    <Icon name="lock" size={11} />
+                    <span>LOCKED ONCHAIN</span>
+                  </div>
+                </div>
+
+                <div className={styles.sectionFields}>
+                  <div className={styles.fieldGroup}>
+                    <label className={styles.fieldLabel} htmlFor="formCriteria">
+                      Immutable Acceptance Criteria <span className={styles.required}>*</span>
+                    </label>
+                    <textarea
+                      id="formCriteria"
+                      className={styles.textArea}
+                      rows={4}
+                      value={formCriteria}
+                      onChange={(e) => setFormCriteria(e.target.value)}
+                      placeholder="Define precise pass/fail criteria (e.g. test coverage, responsive design, verified pull request). These terms are permanently locked onchain."
+                      required
+                    />
+                    <span className={styles.fieldHint}>
+                      Locked onchain upon creation. Submissions are judged strictly against these terms.
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.formDivider} />
+
+              {/* SECTION 3: REWARD & CAPACITY */}
+              <div className={styles.formSection}>
+                <div className={styles.sectionHeader}>
+                  <div className={styles.sectionTitleWithBadge}>
+                    <span className={styles.sectionNumber}>03</span>
+                    <h3 className={styles.sectionTitle}>Reward &amp; Capacity</h3>
+                  </div>
+                </div>
+
+                <div className={styles.sectionFields}>
+                  <div className={styles.twoColumn}>
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="formReward">
+                        Total Reward (MON) <span className={styles.required}>*</span>
+                      </label>
+                      <div className={styles.inputWithUnit}>
+                        <input
+                          id="formReward"
+                          type="number"
+                          step="any"
+                          min="0.0001"
+                          className={styles.textInput}
+                          value={formRewardMon}
+                          onChange={(e) => setFormRewardMon(e.target.value)}
+                          placeholder="0.1"
+                          required
+                        />
+                        <span className={styles.inputUnit}>MON</span>
+                      </div>
+                    </div>
+
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="formMaxSubs">
+                        Max Submissions (1–10) <span className={styles.required}>*</span>
+                      </label>
+                      <input
+                        id="formMaxSubs"
+                        type="number"
+                        min="1"
+                        max="10"
+                        className={styles.textInput}
+                        value={formMaxSubmissions}
+                        onChange={(e) => setFormMaxSubmissions(e.target.value)}
+                        required
+                      />
+                      <span className={styles.fieldHint}>
+                        Hard onchain cap. Automatically closes to review when full.
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Dynamic 80/20 Reward Allocation Mini-Cards */}
+                  <div className={styles.allocationContainer}>
+                    <div className={styles.allocationHeader}>
+                      <span className={styles.allocationTitle}>Escrow Split Guarantee</span>
+                      <span className={styles.allocationProtocolTag}>80 / 20 PROTOCOL RULE</span>
+                    </div>
+
+                    <div className={styles.previewGrid}>
+                      {/* Winner Allocation Card */}
+                      <div className={`${styles.previewCard} ${styles.winnerCard}`}>
+                        <div className={styles.cardHeaderRow}>
+                          <span className={styles.cardPercentageBadge}>80%</span>
+                          <span className={styles.previewLabel}>Winner Allocation</span>
+                        </div>
+                        <div className={`${styles.previewValue} ${styles.winnerColor}`}>
+                          {winnerPreviewMon} <span className={styles.unitSuffix}>MON</span>
+                        </div>
+                        <span className={styles.previewSub}>
+                          Paid automatically to the single approved submitter
+                        </span>
+                      </div>
+
+                      {/* Participation Pool Card */}
+                      <div className={`${styles.previewCard} ${styles.poolCard}`}>
+                        <div className={styles.cardHeaderRow}>
+                          <span className={`${styles.cardPercentageBadge} ${styles.poolBadge}`}>20%</span>
+                          <span className={styles.previewLabel}>Participation Pool</span>
+                        </div>
+                        <div className={`${styles.previewValue} ${styles.poolColor}`}>
+                          {poolPreviewMon} <span className={styles.unitSuffix}>MON</span>
+                        </div>
+                        <span className={styles.previewSub}>
+                          Shared equally among all valid contributors
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.formDivider} />
+
+              {/* SECTION 4: SUBMISSION WINDOW & RESOLUTION */}
+              <div className={styles.formSection}>
+                <div className={styles.sectionHeader}>
+                  <div className={styles.sectionTitleWithBadge}>
+                    <span className={styles.sectionNumber}>04</span>
+                    <h3 className={styles.sectionTitle}>Submission Window &amp; Resolution</h3>
+                  </div>
+                </div>
+
+                <div className={styles.sectionFields}>
+                  <div className={styles.twoColumn}>
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="formDuration">
+                        Submission Window (Hours) <span className={styles.required}>*</span>
+                      </label>
+                      <div className={styles.inputWithUnit}>
+                        <input
+                          id="formDuration"
+                          type="number"
+                          min="1"
+                          className={styles.textInput}
+                          value={formDurationHours}
+                          onChange={(e) => setFormDurationHours(e.target.value)}
+                          placeholder="48"
+                          required
+                        />
+                        <span className={styles.inputUnit}>HOURS</span>
+                      </div>
+                    </div>
+
+                    <div className={styles.fieldGroup}>
+                      <div className={styles.labelWithOptional}>
+                        <label className={styles.fieldLabel} htmlFor="formDisputeResolver">
+                          Optional Dispute Resolver Address
+                        </label>
+                        <span className={styles.optionalPill}>ADVANCED</span>
+                      </div>
+                      <input
+                        id="formDisputeResolver"
+                        type="text"
+                        className={styles.textInput}
+                        value={formDisputeResolver}
+                        onChange={(e) => setFormDisputeResolver(e.target.value)}
+                        placeholder="0x... (Leave blank for default protocol handling)"
+                      />
+                      <span className={styles.fieldHint}>
+                        Third-party arbiter address permitted to resolve contested submissions.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {formValidationError && (
+                <div className={styles.errorMessage}>{formValidationError}</div>
+              )}
+
+              {/* Primary Action Button */}
+              <div className={styles.formActionArea}>
+                <button
+                  type="submit"
+                  className={styles.fundCreateBtn}
+                  id="fund-and-create-bounty-btn"
+                >
+                  <Icon name="lock" size={17} />
+                  <span>Fund &amp; Create Bounty ({formRewardMon} MON)</span>
+                  <Icon name="arrow" size={15} />
+                </button>
+                <span className={styles.escrowNotice}>
+                  Funds are locked in Monad Escrow upon transaction confirmation
+                </span>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
+
+      {/* Modal: Contributor Submit Deliverable */}
+      {showSubmitModal && activeBounty && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modalCard}>
+            <div className={styles.modalHeader}>
+              <h3 className={styles.modalTitle}>Submit Deliverable</h3>
+              <button className={styles.modalClose} onClick={() => setShowSubmitModal(false)}>
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={onSubmitWork} className={styles.createForm}>
+              <div className={styles.criteriaSection}>
+                <span className={styles.criteriaTitle}>Acceptance Criteria:</span>
+                <div className={styles.criteriaBody}>{activeBounty.acceptanceCriteria}</div>
+              </div>
+
+              <div className={styles.fieldGroup}>
+                <label className={styles.fieldLabel} htmlFor="subProof">
+                  Deliverable / Proof URI <span className={styles.required}>*</span>
+                </label>
+                <input
+                  id="subProof"
+                  type="text"
+                  className={styles.textInput}
+                  value={submissionProofUri}
+                  onChange={(e) => setSubmissionProofUri(e.target.value)}
+                  placeholder="https://github.com/org/repo/pull/1 or IPFS URI"
+                  required
+                />
+              </div>
+
+              <div className={styles.fieldGroup}>
+                <label className={styles.fieldLabel} htmlFor="subNotes">
+                  Verification Notes
+                </label>
+                <textarea
+                  id="subNotes"
+                  className={styles.textArea}
+                  rows={3}
+                  value={submissionNotes}
+                  onChange={(e) => setSubmissionNotes(e.target.value)}
+                  placeholder="Summary of completed deliverables and instructions for testing..."
+                />
+              </div>
+
+              <div className={styles.modalActions}>
+                <button
+                  type="button"
+                  className={styles.buttonSecondary}
+                  onClick={() => setShowSubmitModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className={styles.buttonPrimary}>
+                  Submit Work
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

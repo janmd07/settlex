@@ -1,0 +1,230 @@
+.walletArea {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  position: relative;
+}
+
+.network,
+.balance,
+.addressBtn,
+.disconnectBtn,
+.switchBtn,
+.connectBtn {
+  height: 34px;
+  border: 1px solid rgba(130, 140, 185, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 19, 35, 0.76);
+  color: #e8ebf7;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+/* Network Badge */
+.network {
+  padding: 0 9px;
+  gap: 6px;
+  color: #7ce7b2;
+}
+
+.netGreen {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #29d68a;
+  box-shadow: 0 0 8px #29d68a;
+  display: inline-block;
+}
+
+.netAmber {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+  display: inline-block;
+}
+
+.protectedTag {
+  font-size: 8px;
+  color: #a18bff;
+  border: 1px solid rgba(139, 112, 255, 0.35);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* Balance */
+.balance {
+  padding: 0 10px;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.balanceIcon {
+  color: #8e67ff;
+  font-size: 10px;
+}
+
+/* Address Button */
+.addressBtn {
+  padding: 0 10px;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.addressBtn:hover {
+  background: rgba(25, 31, 56, 0.85);
+  border-color: rgba(139, 112, 255, 0.35);
+}
+
+.addressDot {
+  width: 6px;
+  height: 6px;
+  background: #9169ff;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Action Buttons */
+.disconnectBtn {
+  padding: 0 11px;
+  color: #c5cad9;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.disconnectBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.switchBtn {
+  padding: 0 11px;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.switchBtn:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+
+.connectBtn {
+  padding: 0 15px;
+  gap: 6px;
+  background: linear-gradient(135deg, #7c4dff, #6841ed);
+  border: 1px solid rgba(135, 116, 255, 0.3);
+  box-shadow: 0 4px 14px rgba(102, 65, 237, 0.3);
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.connectBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(102, 65, 237, 0.45);
+}
+
+.connectBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.buttonSpinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Alert Notification Banner */
+.alert {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  backdrop-filter: blur(14px);
+  min-width: 260px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.alertContent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alertIcon {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.alert_info {
+  background: rgba(18, 26, 50, 0.95);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
+}
+
+.alert_success {
+  background: rgba(16, 38, 30, 0.95);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+}
+
+.alert_warning {
+  background: rgba(45, 33, 14, 0.95);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fde68a;
+}
+
+.alert_error {
+  background: rgba(45, 18, 20, 0.95);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.alertDismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.6;
+}
+
+.alertDismiss:hover {
+  opacity: 1;
+}
+
+@media (max-width: 768px) {
+  .walletArea {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

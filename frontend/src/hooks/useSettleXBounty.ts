@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { parseEther } from 'viem';
 import { useMonadWallet } from './useMonadWallet';
 import {
@@ -17,6 +17,8 @@ import {
   fetchNextBountyId,
   fetchAllBounties,
   fetchUserBounties,
+  fetchCreatorBounties,
+  classifyCreatorBounty,
   fetchClaimableReward,
   fetchHasSubmitted,
   fetchSettlementTxHash,
@@ -56,6 +58,8 @@ export function useSettleXBounty() {
   const [paymentSummary, setPaymentSummary] = useState<PaymentSummary | null>(null);
   const [paymentActivity, setPaymentActivity] = useState<PaymentActivityItem[]>([]);
   const [isLoadingPayments, setIsLoadingPayments] = useState<boolean>(false);
+  const [creatorBounties, setCreatorBounties] = useState<FormattedBounty[]>([]);
+  const [isLoadingCreatorBounties, setIsLoadingCreatorBounties] = useState<boolean>(false);
 
   // Role detection for the active connected wallet
   const userAddressLower = wallet.account?.toLowerCase();
@@ -217,6 +221,43 @@ export function useSettleXBounty() {
     }
   }, []);
 
+  // Read: Load canonical creator bounties using getUserCreatedBounties & Multicall3
+  const loadCreatorBounties = useCallback(
+    async (address?: string) => {
+      const target = (address || wallet.account) as `0x${string}` | undefined;
+      if (!target) {
+        setCreatorBounties([]);
+        return [];
+      }
+      setIsLoadingCreatorBounties(true);
+      try {
+        const list = await fetchCreatorBounties(target);
+        setCreatorBounties(list);
+        return list;
+      } catch (err) {
+        console.error('Failed to load creator bounties:', err);
+        return [];
+      } finally {
+        setIsLoadingCreatorBounties(false);
+      }
+    },
+    [wallet.account]
+  );
+
+  const creatorNeedsReviewCount = useMemo(() => {
+    const now = Math.floor(Date.now() / 1000);
+    return creatorBounties.filter((b) => classifyCreatorBounty(b, now).isNeedsReview).length;
+  }, [creatorBounties]);
+
+  // Sync creator bounties when wallet account changes
+  useEffect(() => {
+    if (wallet.account) {
+      loadCreatorBounties(wallet.account).catch(() => {});
+    } else {
+      setCreatorBounties([]);
+    }
+  }, [wallet.account, loadCreatorBounties]);
+
   // Guarded execution wrapper
   const executeGuardedWrite = async (
     actionName: string,
@@ -242,9 +283,10 @@ export function useSettleXBounty() {
         hash: result.hash,
       });
 
-      // Automatically reload active bounty and all bounties
+      // Automatically reload active bounty, creator bounties, and all bounties
       setTimeout(() => {
         loadAllBounties().catch(console.error);
+        loadCreatorBounties().catch(console.error);
         if (activeBounty) {
           loadBounty(activeBounty.bountyId).catch(console.error);
           refreshClaimableReward().catch(console.error);
@@ -415,6 +457,10 @@ export function useSettleXBounty() {
     refreshNextBountyId,
     refreshClaimableReward,
     loadUserBounties,
+    creatorBounties,
+    isLoadingCreatorBounties,
+    loadCreatorBounties,
+    creatorNeedsReviewCount,
     handleCreateBounty,
     handleSubmitWork,
     handleCloseSubmissions,

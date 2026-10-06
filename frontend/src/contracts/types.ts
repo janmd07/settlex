@@ -256,3 +256,29 @@ export interface SettlementTxDetails {
   winnerPayoutWei?: bigint;
   participantPoolPayoutWei?: bigint;
 }
+
+/* ==========================================================================
+   SettleX V2: Creator Workspace & Review Dashboard Types
+   ========================================================================== */
+
+export type CreatorTab = 'needs-review' | 'active' | 'completed' | 'refunded' | 'all';
+
+export type CreatorBountyCategory =
+  | 'needs-review'
+  | 'active'
+  | 'completed'
+  | 'refunded'
+  | 'dispute-review';
+
+export interface CreatorBountyClassification {
+  category: CreatorBountyCategory;
+  statusLabel: string;
+  isNeedsReview: boolean;
+  isActive: boolean;
+  isCompleted: boolean;
+  isRefunded: boolean;
+  isDisputeReview: boolean;
+  canReview: boolean;
+  reviewDeadlineRemainingSeconds: number | null;
+  submissionDeadlineRemainingSeconds: number | null;
+}

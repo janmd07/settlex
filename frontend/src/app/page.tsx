@@ -47,6 +47,7 @@ export default function Home() {
   const [currentView, setCurrentView] = useState<AppView>('home');
   const [myBountiesFilter, setMyBountiesFilter] = useState(false);
   const [activeNav, setActiveNav] = useState<'bounties' | 'how' | 'my' | 'dashboard'>('bounties');
+  const [needsReviewCount, setNeedsReviewCount] = useState<number>(0);
 
   const navigateTo = (view: AppView, myOnly = false) => {
     setCurrentView(view);
@@ -193,6 +194,14 @@ export default function Home() {
             >
               <Icon name="file" size={14} />
               <span>My Bounties</span>
+              {needsReviewCount > 0 && (
+                <span
+                  className={styles.navNeedsReviewBadge}
+                  title={`${needsReviewCount} ${needsReviewCount === 1 ? 'bounty requires' : 'bounties require'} review`}
+                >
+                  {needsReviewCount}
+                </span>
+              )}
             </button>
             <button
               className={`${styles.navLink} ${activeNav === 'dashboard' || currentView === 'payment-activity' ? styles.activeNavLink : ''}`}
@@ -474,6 +483,7 @@ export default function Home() {
             <ContractInspector
               viewMode="bounties"
               myBountiesOnly={myBountiesFilter}
+              onNeedsReviewCountChange={setNeedsReviewCount}
               onNavigateHome={() => navigateTo('home')}
               onNavigateCreate={() => navigateTo('create', false)}
               onNavigateExplore={() => navigateTo('bounties', false)}

@@ -18,6 +18,9 @@ import {
   RawBounty,
   RawDeal,
   RawSubmission,
+  CreatorBountyClassification,
+  CreatorTab,
+  CreatorBountyCategory,
 } from './types';
 
 /**
@@ -388,6 +391,255 @@ export async function fetchAllBounties(): Promise<FormattedBounty[]> {
     console.error('Failed to fetch all bounties:', err);
     return [];
   }
+}
+
+/**
+ * Reads all bounty IDs created by an address using getUserCreatedBounties,
+ * then fetches bounty details and submissions using batched Multicall3.
+ * Canonical onchain data source for the Creator workspace.
+ */
+export async function fetchCreatorBounties(userAddress: `0x${string}`): Promise<FormattedBounty[]> {
+  try {
+    const createdIdsRaw = await publicClient.readContract({
+      address: SETTLEX_BOUNTY_ADDRESS,
+      abi: SETTLEX_BOUNTY_ABI,
+      functionName: 'getUserCreatedBounties',
+      args: [userAddress],
+    });
+
+    const ids = Array.from(new Set((createdIdsRaw as bigint[]).map(Number)));
+    if (ids.length === 0) {
+      return [];
+    }
+
+    // Sort newest first by bounty ID
+    ids.sort((a, b) => b - a);
+
+    const bounties: FormattedBounty[] = [];
+
+    // Multicall batch reads
+    try {
+      const bountyCalls = ids.map((id) => ({
+        address: SETTLEX_BOUNTY_ADDRESS,
+        abi: SETTLEX_BOUNTY_ABI,
+        functionName: 'getBounty',
+        args: [BigInt(id)],
+      }));
+
+      const subCalls = ids.map((id) => ({
+        address: SETTLEX_BOUNTY_ADDRESS,
+        abi: SETTLEX_BOUNTY_ABI,
+        functionName: 'getBountySubmissions',
+        args: [BigInt(id)],
+      }));
+
+      const [bountyResults, subResults] = await Promise.all([
+        publicClient.multicall({ contracts: bountyCalls }),
+        publicClient.multicall({ contracts: subCalls }),
+      ]);
+
+      for (let i = 0; i < ids.length; i++) {
+        const bRes = bountyResults[i];
+        if (bRes.status === 'success' && bRes.result) {
+          const formatted = formatBounty(bRes.result as unknown as RawBounty);
+
+          // Attach submissions & winner address if available
+          const sRes = subResults[i];
+          if (sRes && sRes.status === 'success' && Array.isArray(sRes.result)) {
+            const rawSubs = sRes.result as unknown as readonly RawSubmission[];
+            const subs = rawSubs.map(formatSubmission);
+            if (formatted.state === BountyState.Settled && formatted.winnerSubmissionId > 0) {
+              const winner = subs.find((s) => s.submissionId === formatted.winnerSubmissionId);
+              if (winner) {
+                formatted.winnerAddress = winner.contributor;
+              }
+            }
+          }
+
+          bounties.push(formatted);
+        } else if (bRes.status === 'failure') {
+          console.warn(`Multicall item for creator bounty #${ids[i]} failed:`, bRes.error);
+        }
+      }
+
+      return bounties;
+    } catch (multicallErr) {
+      console.warn('Multicall3 batch read failed for creator bounties, falling back:', multicallErr);
+    }
+
+    // Fallback: Individual reads with Promise.allSettled
+    const fallbackResults = await Promise.allSettled(
+      ids.map(async (id) => {
+        const bounty = await fetchBounty(id);
+        try {
+          const subs = await fetchBountySubmissions(id);
+          if (bounty.state === BountyState.Settled && bounty.winnerSubmissionId > 0) {
+            const winner = subs.find((s) => s.submissionId === bounty.winnerSubmissionId);
+            if (winner) {
+              bounty.winnerAddress = winner.contributor;
+            }
+          }
+        } catch {}
+        return bounty;
+      })
+    );
+
+    for (const res of fallbackResults) {
+      if (res.status === 'fulfilled') {
+        bounties.push(res.value);
+      }
+    }
+
+    return bounties;
+  } catch (err) {
+    console.error('Failed to fetch creator bounties:', err);
+    return [];
+  }
+}
+
+/**
+ * Classifies a creator bounty into a review/action category based on onchain state and deadlines.
+ * Strictly respects the V2 lifecycle:
+ * - Settled -> Completed
+ * - Refunded -> Refunded
+ * - DisputeReview / (Reviewing with review window expired) -> Dispute Review
+ * - Submissions closed + valid submissions exist + active review window -> Needs Review
+ * - Open + accepting submissions -> Active
+ * - Open + deadline passed + 0 submissions -> Refund Available (Refunded category)
+ */
+export function classifyCreatorBounty(
+  bounty: FormattedBounty,
+  currentTime: number = Math.floor(Date.now() / 1000)
+): CreatorBountyClassification {
+  const subCount = bounty.submissionCount;
+  const maxSubs = bounty.maxSubmissions;
+  const subDeadline = bounty.submissionDeadlineTimestamp;
+  const revDeadline = bounty.reviewDeadlineTimestamp;
+
+  // 1. Completed / Settled
+  if (bounty.state === BountyState.Settled) {
+    return {
+      category: 'completed',
+      statusLabel: 'Settled',
+      isNeedsReview: false,
+      isActive: false,
+      isCompleted: true,
+      isRefunded: false,
+      isDisputeReview: false,
+      canReview: false,
+      reviewDeadlineRemainingSeconds: null,
+      submissionDeadlineRemainingSeconds: null,
+    };
+  }
+
+  // 2. Refunded
+  if (bounty.state === BountyState.Refunded) {
+    return {
+      category: 'refunded',
+      statusLabel: 'Refunded',
+      isNeedsReview: false,
+      isActive: false,
+      isCompleted: false,
+      isRefunded: true,
+      isDisputeReview: false,
+      canReview: false,
+      reviewDeadlineRemainingSeconds: null,
+      submissionDeadlineRemainingSeconds: null,
+    };
+  }
+
+  // 3. Dispute Review (Creator missed 24h review or contract in DisputeReview state)
+  const isReviewExpired = revDeadline > 0 && currentTime > revDeadline;
+  if (bounty.state === BountyState.DisputeReview || (bounty.state === BountyState.Reviewing && isReviewExpired)) {
+    return {
+      category: 'dispute-review',
+      statusLabel: 'Dispute Review',
+      isNeedsReview: false,
+      isActive: false,
+      isCompleted: false,
+      isRefunded: false,
+      isDisputeReview: true,
+      canReview: false,
+      reviewDeadlineRemainingSeconds: null,
+      submissionDeadlineRemainingSeconds: null,
+    };
+  }
+
+  // Check if submissions are closed (capacity reached, deadline passed, or Reviewing state)
+  const capacityFull = maxSubs > 0 && subCount >= maxSubs;
+  const subDeadlinePassed = subDeadline > 0 && currentTime >= subDeadline;
+  const submissionsClosed = capacityFull || subDeadlinePassed || bounty.state === BountyState.Reviewing;
+
+  // 4. Needs Review (Highest Priority)
+  // - Has valid submissions
+  // - Submissions no longer accepted
+  // - Not settled, not refunded, not dispute review
+  // - Creator review window still active
+  if (subCount > 0 && submissionsClosed) {
+    const revRemaining = revDeadline > 0 ? Math.max(0, revDeadline - currentTime) : null;
+    return {
+      category: 'needs-review',
+      statusLabel: 'Ready for Review',
+      isNeedsReview: true,
+      isActive: false,
+      isCompleted: false,
+      isRefunded: false,
+      isDisputeReview: false,
+      canReview: true,
+      reviewDeadlineRemainingSeconds: revRemaining,
+      submissionDeadlineRemainingSeconds: null,
+    };
+  }
+
+  // 5. Active / Accepting Submissions
+  // - State is Open
+  // - subCount < maxSubs
+  // - subDeadline not passed
+  if (bounty.state === BountyState.Open && !subDeadlinePassed && !capacityFull) {
+    const subRemaining = subDeadline > 0 ? Math.max(0, subDeadline - currentTime) : null;
+    return {
+      category: 'active',
+      statusLabel: 'Accepting Submissions',
+      isNeedsReview: false,
+      isActive: true,
+      isCompleted: false,
+      isRefunded: false,
+      isDisputeReview: false,
+      canReview: false,
+      reviewDeadlineRemainingSeconds: null,
+      submissionDeadlineRemainingSeconds: subRemaining,
+    };
+  }
+
+  // 6. Submissions deadline passed with 0 submissions -> Eligible for refund
+  if (subCount === 0 && subDeadlinePassed) {
+    return {
+      category: 'refunded',
+      statusLabel: 'Refund Available',
+      isNeedsReview: false,
+      isActive: false,
+      isCompleted: false,
+      isRefunded: true,
+      isDisputeReview: false,
+      canReview: false,
+      reviewDeadlineRemainingSeconds: null,
+      submissionDeadlineRemainingSeconds: null,
+    };
+  }
+
+  // Fallback
+  return {
+    category: 'active',
+    statusLabel: bounty.stateLabel || 'Active',
+    isNeedsReview: false,
+    isActive: true,
+    isCompleted: false,
+    isRefunded: false,
+    isDisputeReview: false,
+    canReview: false,
+    reviewDeadlineRemainingSeconds: null,
+    submissionDeadlineRemainingSeconds: null,
+  };
 }
 
 /* ==========================================================================

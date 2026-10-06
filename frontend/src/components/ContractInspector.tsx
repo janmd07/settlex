@@ -10,8 +10,8 @@ import {
   getExplorerTxUrl,
   getExplorerAddressUrl,
 } from '../config/contract';
-import { BountyState } from '../contracts/types';
-import { getCachedSettlementTx } from '../contracts/reads';
+import { BountyState, FormattedBounty, SettlementTxDetails, CreatorTab } from '../contracts/types';
+import { getCachedSettlementTx, fetchSettlementTxHash, classifyCreatorBounty } from '../contracts/reads';
 import { Icon } from './Icons';
 import styles from './ContractInspector.module.css';
 
@@ -26,6 +26,7 @@ export interface ContractInspectorProps {
   externalTab?: ActiveTab;
   onTabChange?: (tab: ActiveTab) => void;
   myBountiesOnly?: boolean;
+  onNeedsReviewCountChange?: (count: number) => void;
   onNavigateHome?: () => void;
   onNavigateCreate?: () => void;
   onNavigateExplore?: () => void;
@@ -36,6 +37,7 @@ export function ContractInspector({
   externalTab,
   onTabChange,
   myBountiesOnly = false,
+  onNeedsReviewCountChange,
   onNavigateHome,
   onNavigateCreate,
   onNavigateExplore,
@@ -65,6 +67,10 @@ export function ContractInspector({
     loadBounty,
     loadAllBounties,
     refreshNextBountyId,
+    creatorBounties,
+    isLoadingCreatorBounties,
+    loadCreatorBounties,
+    creatorNeedsReviewCount,
     handleCreateBounty,
     handleSubmitWork,
     handleCloseSubmissions,
@@ -80,6 +86,9 @@ export function ContractInspector({
     viewMode === 'create' ? 'create' : 'manage'
   );
   const [exploreView, setExploreView] = useState<ExploreView>('active');
+  const [creatorTab, setCreatorTab] = useState<CreatorTab>('needs-review');
+  const [hasSetInitialCreatorTab, setHasSetInitialCreatorTab] = useState(false);
+  const [creatorTxMap, setCreatorTxMap] = useState<Record<number, SettlementTxDetails | null>>({});
   const [selectedBountyId, setSelectedBountyId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOption, setSortOption] = useState<SortOption>('reward-desc');
@@ -98,16 +107,26 @@ export function ContractInspector({
     }
   };
 
+  // Notify parent of review count for nav badge
+  useEffect(() => {
+    onNeedsReviewCountChange?.(creatorNeedsReviewCount);
+  }, [creatorNeedsReviewCount, onNeedsReviewCountChange]);
+
+  // Reset initial creator tab selection when wallet account changes
+  useEffect(() => {
+    setHasSetInitialCreatorTab(false);
+  }, [wallet.account]);
+
   useEffect(() => {
     if (viewMode === 'payment-activity' && wallet.account) {
       loadPaymentData();
     }
   }, [viewMode, wallet.account, loadPaymentData]);
 
-  // Reset pagination to Page 1 when search query, sort option, or view changes
+  // Reset pagination to Page 1 when search query, sort option, tab, or view changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, sortOption, exploreView, myBountiesOnly]);
+  }, [searchQuery, sortOption, exploreView, creatorTab, myBountiesOnly]);
 
   // Sync with external tab or viewMode if provided
   useEffect(() => {
@@ -237,33 +256,107 @@ export function ContractInspector({
     };
   }, [allBounties]);
 
-  // Filtered lists for Active and Completed
+  // Filtered lists for Active and Completed (Public Explore)
   const activeBountiesList = useMemo(() => {
-    let list = allBounties.filter(
+    return allBounties.filter(
       (b) =>
         b.state === BountyState.Open ||
         b.state === BountyState.Reviewing ||
         b.state === BountyState.DisputeReview
     );
-    if (myBountiesOnly && wallet.account) {
-      const acc = wallet.account.toLowerCase();
-      list = list.filter((b) => b.creator.toLowerCase() === acc);
-    }
-    return list;
-  }, [allBounties, myBountiesOnly, wallet.account]);
+  }, [allBounties]);
 
   const completedBountiesList = useMemo(() => {
-    let list = allBounties.filter(
+    return allBounties.filter(
       (b) =>
         b.state === BountyState.Settled ||
         b.state === BountyState.Refunded
     );
-    if (myBountiesOnly && wallet.account) {
-      const acc = wallet.account.toLowerCase();
-      list = list.filter((b) => b.creator.toLowerCase() === acc);
+  }, [allBounties]);
+
+  // Classify canonical creator bounties into review/action status groups
+  const creatorCategorized = useMemo(() => {
+    const needsReview: FormattedBounty[] = [];
+    const active: FormattedBounty[] = [];
+    const completed: FormattedBounty[] = [];
+    const refunded: FormattedBounty[] = [];
+
+    for (const b of creatorBounties) {
+      const { isNeedsReview, isActive, isCompleted, isRefunded } = classifyCreatorBounty(b, currentTime);
+      if (isNeedsReview) needsReview.push(b);
+      else if (isActive) active.push(b);
+      else if (isCompleted) completed.push(b);
+      else if (isRefunded) refunded.push(b);
     }
-    return list;
-  }, [allBounties, myBountiesOnly, wallet.account]);
+
+    return {
+      needsReview,
+      active,
+      completed,
+      refunded,
+      all: creatorBounties,
+    };
+  }, [creatorBounties, currentTime]);
+
+  // Set initial Creator tab based on review priority
+  useEffect(() => {
+    if (creatorBounties.length > 0 && !hasSetInitialCreatorTab) {
+      if (creatorNeedsReviewCount > 0) {
+        setCreatorTab('needs-review');
+      } else {
+        const hasActive = creatorBounties.some(
+          (b) => classifyCreatorBounty(b, currentTime).isActive
+        );
+        setCreatorTab(hasActive ? 'active' : 'all');
+      }
+      setHasSetInitialCreatorTab(true);
+    }
+  }, [creatorBounties, creatorNeedsReviewCount, hasSetInitialCreatorTab, currentTime]);
+
+  // Resolve onchain settlement/refund transaction hashes for creator bounties using existing resolver
+  useEffect(() => {
+    if (!myBountiesOnly || creatorBounties.length === 0) return;
+    const targetBounties = creatorBounties.filter(
+      (b) => b.state === BountyState.Settled || b.state === BountyState.Refunded
+    );
+    for (const b of targetBounties) {
+      const cached = getCachedSettlementTx(b.bountyId);
+      if (cached) {
+        setCreatorTxMap((prev) => (prev[b.bountyId] ? prev : { ...prev, [b.bountyId]: cached }));
+      } else {
+        fetchSettlementTxHash(b.bountyId, b.state, b.settledAtTimestamp)
+          .then((details) => {
+            if (details) {
+              setCreatorTxMap((prev) => ({ ...prev, [b.bountyId]: details }));
+            }
+          })
+          .catch((err) => console.warn(`Failed to resolve settlement tx for #${b.bountyId}:`, err));
+      }
+    }
+  }, [myBountiesOnly, creatorBounties]);
+
+  // Current creator list filtered by lightweight search (ID or title)
+  const displayedCreatorBounties = useMemo(() => {
+    let list: FormattedBounty[] = [];
+    if (creatorTab === 'needs-review') list = creatorCategorized.needsReview;
+    else if (creatorTab === 'active') list = creatorCategorized.active;
+    else if (creatorTab === 'completed') list = creatorCategorized.completed;
+    else if (creatorTab === 'refunded') list = creatorCategorized.refunded;
+    else list = creatorCategorized.all;
+
+    const query = searchQuery.toLowerCase().trim();
+    if (!query) return list;
+
+    const cleanIdQuery = query.startsWith('#') ? query.slice(1).trim() : query;
+    return list.filter((b) => {
+      return (
+        b.taskTitle.toLowerCase().includes(query) ||
+        String(b.bountyId) === cleanIdQuery ||
+        `#${b.bountyId}` === query ||
+        b.taskMetadataUri.toLowerCase().includes(query)
+      );
+    });
+  }, [creatorTab, creatorCategorized, searchQuery]);
 
   // Current list filtered by search and sorted
   const displayedBounties = useMemo(() => {
@@ -931,31 +1024,67 @@ export function ContractInspector({
       <div id="bounties" className={styles.marketplaceBox}>
         {txNotificationElement}
 
-        {/* Dedicated Explore Bounties Page Header */}
+        {/* Dedicated Explore Bounties / Creator Workspace Header */}
         {viewMode === 'bounties' && selectedBountyId === null && (
-          <div className={styles.explorePageHeader}>
-            <div className={styles.exploreBreadcrumb}>
-              <button
-                type="button"
-                className={styles.backButton}
-                onClick={onNavigateHome}
-                id="explore-back-home-btn"
-              >
-                <span className={styles.backArrowIcon}>&larr;</span>
-                <span>Back to Home</span>
-              </button>
-              <div className={styles.exploreNetworkBadge}>
-                <span className={styles.badgePulseDot} />
-                <span>Monad Testnet</span>
+          myBountiesOnly ? (
+            <div className={styles.creatorPageHeader}>
+              <div className={styles.creatorBreadcrumb}>
+                <button
+                  type="button"
+                  className={styles.backButton}
+                  onClick={onNavigateExplore || onNavigateHome}
+                  id="creator-back-explore-btn"
+                >
+                  <span className={styles.backArrowIcon}>&larr;</span>
+                  <span>Back to Explore Bounties</span>
+                </button>
+                <div className={styles.exploreNetworkBadge}>
+                  <span className={styles.badgePulseDot} />
+                  <span>Monad Testnet</span>
+                </div>
+              </div>
+              <div className={styles.creatorTitleArea}>
+                <div className={styles.creatorEyebrow}>
+                  <span className={styles.eyebrowStar}>✦</span> CREATOR WORKSPACE
+                </div>
+                <h2 className={styles.creatorPageTitle}>
+                  <span>My Bounties</span>
+                  {creatorNeedsReviewCount > 0 && (
+                    <span className={styles.creatorCountBadgeAlert}>
+                      {creatorNeedsReviewCount} Ready for Review
+                    </span>
+                  )}
+                </h2>
+                <p className={styles.creatorPageSubtitle}>
+                  Manage your created bounties, review contributor deliverables, and disburse onchain rewards.
+                </p>
               </div>
             </div>
-            <div className={styles.exploreTitleArea}>
-              <h2 className={styles.explorePageTitle}>Explore Work Bounties</h2>
-              <p className={styles.explorePageSubtitle}>
-                Browse active onchain work bounties, inspect criteria, and submit deliverables for guaranteed protocol settlement.
-              </p>
+          ) : (
+            <div className={styles.explorePageHeader}>
+              <div className={styles.exploreBreadcrumb}>
+                <button
+                  type="button"
+                  className={styles.backButton}
+                  onClick={onNavigateHome}
+                  id="explore-back-home-btn"
+                >
+                  <span className={styles.backArrowIcon}>&larr;</span>
+                  <span>Back to Home</span>
+                </button>
+                <div className={styles.exploreNetworkBadge}>
+                  <span className={styles.badgePulseDot} />
+                  <span>Monad Testnet</span>
+                </div>
+              </div>
+              <div className={styles.exploreTitleArea}>
+                <h2 className={styles.explorePageTitle}>Explore Work Bounties</h2>
+                <p className={styles.explorePageSubtitle}>
+                  Browse active onchain work bounties, inspect criteria, and submit deliverables for guaranteed protocol settlement.
+                </p>
+              </div>
             </div>
-          </div>
+          )
         )}
 
         {/* ========================================================================= */}
@@ -965,7 +1094,666 @@ export function ContractInspector({
           <div className={styles.section}>
             {/* If no specific bounty selected: Discovery List View */}
             {selectedBountyId === null ? (
-              <div className={styles.discoveryWrapper}>
+              myBountiesOnly ? (
+                <div className={styles.discoveryWrapper}>
+                  {!wallet.isConnected ? (
+                    <div className={styles.creatorDisconnectedCard}>
+                      <div className={styles.creatorPromptIcon}>
+                        <Icon name="wallet" size={32} />
+                      </div>
+                      <h3 className={styles.creatorPromptTitle}>Connect your wallet to view your bounties</h3>
+                      <p className={styles.creatorPromptText}>
+                        Connect your EVM wallet on Monad Testnet to view your created bounties, evaluate submissions against criteria, and disburse guaranteed onchain rewards.
+                      </p>
+                      <button
+                        type="button"
+                        className={styles.buttonPrimary}
+                        onClick={wallet.connectWallet}
+                        id="creator-connect-wallet-btn"
+                      >
+                        <Icon name="wallet" size={16} />
+                        <span>Connect Wallet</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Review Priority Attention Banner */}
+                      {creatorCategorized.needsReview.length > 0 && (
+                        <div className={styles.reviewPriorityBanner}>
+                          <div className={styles.reviewPriorityLeft}>
+                            <span className={styles.priorityAlertIcon}>⚡</span>
+                            <div>
+                              <div className={styles.priorityAlertTitle}>
+                                Action Required: {creatorCategorized.needsReview.length}{' '}
+                                {creatorCategorized.needsReview.length === 1 ? 'bounty requires' : 'bounties require'} your review
+                              </div>
+                              <div className={styles.priorityAlertSubtitle}>
+                                Submissions have closed. Review deliverables against Acceptance Criteria and select a winner before the review window closes.
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className={styles.priorityAlertBtn}
+                            onClick={() => {
+                              setCreatorTab('needs-review');
+                              setSearchQuery('');
+                            }}
+                            id="banner-jump-review-btn"
+                          >
+                            Review Now &rarr;
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Discovery Sub-tabs & Filter Controls for Creator Workspace */}
+                      <div className={styles.discoveryHeader}>
+                        <div className={styles.creatorNavTabs} role="tablist" aria-label="Creator Bounties Tabs">
+                          <button
+                            type="button"
+                            className={`${styles.creatorNavTab} ${creatorTab === 'needs-review' ? styles.creatorNavTabActive : ''}`}
+                            onClick={() => setCreatorTab('needs-review')}
+                            id="creator-tab-needs-review"
+                            role="tab"
+                            aria-selected={creatorTab === 'needs-review'}
+                          >
+                            <Icon name="file" size={14} />
+                            <span>Needs Review</span>
+                            <span
+                              className={`${styles.creatorCountBadge} ${
+                                creatorCategorized.needsReview.length > 0 ? styles.creatorCountBadgeAlert : ''
+                              }`}
+                            >
+                              {creatorCategorized.needsReview.length}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className={`${styles.creatorNavTab} ${creatorTab === 'active' ? styles.creatorNavTabActive : ''}`}
+                            onClick={() => setCreatorTab('active')}
+                            id="creator-tab-active"
+                            role="tab"
+                            aria-selected={creatorTab === 'active'}
+                          >
+                            <Icon name="bounty" size={14} />
+                            <span>Active</span>
+                            <span className={styles.creatorCountBadge}>
+                              {creatorCategorized.active.length}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className={`${styles.creatorNavTab} ${creatorTab === 'completed' ? styles.creatorNavTabActive : ''}`}
+                            onClick={() => setCreatorTab('completed')}
+                            id="creator-tab-completed"
+                            role="tab"
+                            aria-selected={creatorTab === 'completed'}
+                          >
+                            <Icon name="check" size={14} />
+                            <span>Completed</span>
+                            <span className={styles.creatorCountBadge}>
+                              {creatorCategorized.completed.length}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className={`${styles.creatorNavTab} ${creatorTab === 'refunded' ? styles.creatorNavTabActive : ''}`}
+                            onClick={() => setCreatorTab('refunded')}
+                            id="creator-tab-refunded"
+                            role="tab"
+                            aria-selected={creatorTab === 'refunded'}
+                          >
+                            <Icon name="coins" size={14} />
+                            <span>Refunded</span>
+                            <span className={styles.creatorCountBadge}>
+                              {creatorCategorized.refunded.length}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className={`${styles.creatorNavTab} ${creatorTab === 'all' ? styles.creatorNavTabActive : ''}`}
+                            onClick={() => setCreatorTab('all')}
+                            id="creator-tab-all"
+                            role="tab"
+                            aria-selected={creatorTab === 'all'}
+                          >
+                            <Icon name="grid" size={14} />
+                            <span>All</span>
+                            <span className={styles.creatorCountBadge}>
+                              {creatorCategorized.all.length}
+                            </span>
+                          </button>
+                        </div>
+
+                        {/* Search, Sort & Create Action Controls */}
+                        <div className={styles.filterControls}>
+                          <div className={styles.searchForm}>
+                            <span className={styles.searchIcon}>
+                              <Icon name="search" size={14} />
+                            </span>
+                            <input
+                              type="text"
+                              className={styles.searchInput}
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              placeholder="Search your bounties by title or #ID..."
+                              id="creator-bounties-search-input"
+                            />
+                            {searchQuery && (
+                              <button
+                                type="button"
+                                className={styles.searchClear}
+                                onClick={() => setSearchQuery('')}
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+
+                          <button
+                            className={styles.quickCreateBtn}
+                            onClick={() => {
+                              if (onNavigateCreate) {
+                                onNavigateCreate();
+                              } else {
+                                setActiveTab('create');
+                              }
+                              resetTxState();
+                            }}
+                            id="creator-discovery-create-btn"
+                          >
+                            <Icon name="plus" size={13} />
+                            <span>Create Bounty</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Loading State */}
+                      {isLoadingCreatorBounties && creatorBounties.length === 0 && (
+                        <div className={styles.loadingDiscovery}>
+                          <span className={styles.txSpinner} />
+                          <span>Loading your creator bounties from Monad Testnet...</span>
+                        </div>
+                      )}
+
+                      {/* Empty States */}
+                      {displayedCreatorBounties.length === 0 && !isLoadingCreatorBounties && (
+                        creatorCategorized.all.length === 0 ? (
+                          <div className={styles.creatorEmptyCard}>
+                            <div className={styles.creatorEmptyIcon}>
+                              <Icon name="file" size={24} />
+                            </div>
+                            <h3 className={styles.creatorEmptyTitle}>You haven&apos;t created any bounties yet.</h3>
+                            <p className={styles.creatorEmptySubtitle}>
+                              Publish an onchain work bounty with immutable criteria and guaranteed code settlement on Monad.
+                            </p>
+                            <div className={styles.creatorEmptyActions}>
+                              <button
+                                className={styles.buttonPrimary}
+                                onClick={() => {
+                                  if (onNavigateCreate) onNavigateCreate();
+                                  else setActiveTab('create');
+                                }}
+                                id="creator-empty-create-btn"
+                              >
+                                <Icon name="plus" size={14} />
+                                <span>Create a Bounty</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : searchQuery.trim() ? (
+                          <div className={styles.creatorEmptyCard}>
+                            <div className={styles.creatorEmptyIcon}>
+                              <Icon name="search" size={24} />
+                            </div>
+                            <h3 className={styles.creatorEmptyTitle}>No bounties found.</h3>
+                            <p className={styles.creatorEmptySubtitle}>
+                              No bounties match &ldquo;{searchQuery}&rdquo;. Try adjusting your search query.
+                            </p>
+                            <div className={styles.creatorEmptyActions}>
+                              <button
+                                type="button"
+                                className={styles.buttonSecondary}
+                                onClick={() => setSearchQuery('')}
+                              >
+                                Clear Search
+                              </button>
+                            </div>
+                          </div>
+                        ) : creatorTab === 'needs-review' ? (
+                          <div className={styles.creatorEmptyCard}>
+                            <div className={styles.creatorEmptyIcon}>
+                              <Icon name="check" size={24} />
+                            </div>
+                            <h3 className={styles.creatorEmptyTitle}>No bounties need your review right now.</h3>
+                            <p className={styles.creatorEmptySubtitle}>
+                              All your bounties are either still accepting submissions or have already been settled.
+                            </p>
+                            <div className={styles.creatorEmptyActions}>
+                              <button
+                                type="button"
+                                className={styles.buttonSecondary}
+                                onClick={onNavigateExplore}
+                                id="needs-review-empty-explore-btn"
+                              >
+                                Explore Bounties
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.buttonPrimary}
+                                onClick={() => {
+                                  if (onNavigateCreate) onNavigateCreate();
+                                  else setActiveTab('create');
+                                }}
+                                id="needs-review-empty-create-btn"
+                              >
+                                <Icon name="plus" size={14} />
+                                <span>Create a Bounty</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : creatorTab === 'active' ? (
+                          <div className={styles.creatorEmptyCard}>
+                            <div className={styles.creatorEmptyIcon}>
+                              <Icon name="bounty" size={24} />
+                            </div>
+                            <h3 className={styles.creatorEmptyTitle}>No active bounties accepting submissions.</h3>
+                            <p className={styles.creatorEmptySubtitle}>
+                              Launch a new bounty to start receiving permissionless contributions.
+                            </p>
+                            <div className={styles.creatorEmptyActions}>
+                              <button
+                                type="button"
+                                className={styles.buttonPrimary}
+                                onClick={() => {
+                                  if (onNavigateCreate) onNavigateCreate();
+                                  else setActiveTab('create');
+                                }}
+                                id="active-empty-create-btn"
+                              >
+                                <Icon name="plus" size={14} />
+                                <span>Create a Bounty</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : creatorTab === 'completed' ? (
+                          <div className={styles.creatorEmptyCard}>
+                            <div className={styles.creatorEmptyIcon}>
+                              <Icon name="check" size={24} />
+                            </div>
+                            <h3 className={styles.creatorEmptyTitle}>No completed bounties yet.</h3>
+                            <p className={styles.creatorEmptySubtitle}>
+                              Bounties you have settled and disbursed will appear here.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className={styles.creatorEmptyCard}>
+                            <div className={styles.creatorEmptyIcon}>
+                              <Icon name="coins" size={24} />
+                            </div>
+                            <h3 className={styles.creatorEmptyTitle}>No refunded bounties.</h3>
+                            <p className={styles.creatorEmptySubtitle}>
+                              Bounties that reached deadline with zero submissions and were refunded will appear here.
+                            </p>
+                          </div>
+                        )
+                      )}
+
+                      {/* Creator Bounties Grid */}
+                      {displayedCreatorBounties.length > 0 && (
+                        <div className={styles.creatorBountiesGrid}>
+                          {displayedCreatorBounties.map((bounty) => {
+                            const classification = classifyCreatorBounty(bounty, currentTime);
+                            const isNeedsRev = classification.isNeedsReview;
+                            const isComp = classification.isCompleted;
+                            const isRef = classification.isRefunded;
+                            const isDisp = classification.isDisputeReview;
+                            const txDetails = creatorTxMap[bounty.bountyId];
+
+                            return (
+                              <article
+                                key={bounty.bountyId}
+                                className={`${styles.creatorCard} ${
+                                  isNeedsRev
+                                    ? styles.creatorCardNeedsReview
+                                    : isComp
+                                    ? styles.creatorCardCompleted
+                                    : isRef
+                                    ? styles.creatorCardRefunded
+                                    : isDisp
+                                    ? styles.creatorCardDispute
+                                    : ''
+                                }`}
+                              >
+                                {/* Top Row: ID, Status, Reward */}
+                                <div className={styles.creatorCardTop}>
+                                  <div className={styles.creatorCardBadgeGroup}>
+                                    <span className={styles.creatorBountyIdBadge}>
+                                      #{bounty.bountyId}
+                                    </span>
+                                    <span
+                                      className={`${styles.creatorStatusBadge} ${
+                                        isNeedsRev
+                                          ? styles.creatorStatusNeedsReview
+                                          : isComp
+                                          ? styles.creatorStatusCompleted
+                                          : isRef
+                                          ? styles.creatorStatusRefunded
+                                          : isDisp
+                                          ? styles.creatorStatusDispute
+                                          : styles.creatorStatusActive
+                                      }`}
+                                    >
+                                      {isNeedsRev && <span className={styles.creatorPulseDot} />}
+                                      {classification.statusLabel}
+                                    </span>
+                                  </div>
+
+                                  <div className={styles.creatorCardReward}>
+                                    <span className={styles.creatorCardRewardLabel}>Reward</span>
+                                    <span>{bounty.rewardMon} MON</span>
+                                  </div>
+                                </div>
+
+                                {/* Body: Title & Specific Metrics */}
+                                <div className={styles.creatorCardBody}>
+                                  <h3 className={styles.creatorCardTitle}>{bounty.taskTitle}</h3>
+
+                                  <div className={styles.creatorMetricsGrid}>
+                                    <div className={styles.creatorMetricItem}>
+                                      <span className={styles.creatorMetricLabel}>Submissions</span>
+                                      <span className={styles.creatorMetricVal}>
+                                        {bounty.submissionCount} / {bounty.maxSubmissions}
+                                      </span>
+                                      <div className={styles.creatorMiniProgressBar}>
+                                        <div
+                                          className={styles.creatorMiniProgressFill}
+                                          style={{
+                                            width: `${Math.min(
+                                              100,
+                                              (bounty.submissionCount / Math.max(1, bounty.maxSubmissions)) * 100
+                                            )}%`,
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    {isNeedsRev && (
+                                      <>
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Review Window</span>
+                                          <span className={styles.creatorMetricValAlert}>
+                                            {bounty.reviewDeadlineTimestamp > 0
+                                              ? formatCountdown(bounty.reviewDeadlineTimestamp)
+                                              : 'Review Window Active'}
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Review Deadline</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            {bounty.reviewDeadlineDate}
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Winner (80%)</span>
+                                          <span className={styles.creatorMetricValHighlight}>
+                                            {bounty.winnerMon} MON
+                                          </span>
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {classification.isActive && (
+                                      <>
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Time Left</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            {formatCountdown(bounty.submissionDeadlineTimestamp)}
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Deadline</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            {bounty.submissionDeadlineDate}
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Slots Open</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            {bounty.slotsRemaining} of {bounty.maxSubmissions}
+                                          </span>
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {isComp && (
+                                      <>
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Winner</span>
+                                          <span className={styles.creatorMetricValMono}>
+                                            {bounty.winnerAddress
+                                              ? `${bounty.winnerAddress.slice(0, 6)}...${bounty.winnerAddress.slice(-4)}`
+                                              : `Submission #${bounty.winnerSubmissionId}`}
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Winner Payout</span>
+                                          <span className={styles.creatorMetricValHighlight}>
+                                            {bounty.winnerMon} MON
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Settled At</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            {bounty.settledAtDate || 'Onchain'}
+                                          </span>
+                                        </div>
+
+                                        {txDetails?.txHash ? (
+                                          <div className={styles.creatorTxRow}>
+                                            <span className={styles.creatorTxLabel}>Settlement TX:</span>
+                                            <a
+                                              href={txDetails.explorerUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className={styles.creatorTxLink}
+                                              title={`Inspect on Monadscan: ${txDetails.txHash}`}
+                                            >
+                                              <span>
+                                                {txDetails.txHash.slice(0, 8)}...{txDetails.txHash.slice(-6)}
+                                              </span>
+                                              <Icon name="external" size={11} />
+                                            </a>
+                                            <button
+                                              type="button"
+                                              className={styles.copyTxBtn}
+                                              onClick={(e) => handleCopyTx(txDetails.txHash, e)}
+                                              title="Copy settlement transaction hash"
+                                            >
+                                              <Icon
+                                                name={copiedTxHash === txDetails.txHash ? 'check-copy' : 'copy'}
+                                                size={11}
+                                              />
+                                            </button>
+                                          </div>
+                                        ) : bounty.bountyId > 0 ? (
+                                          <div className={styles.creatorTxRow}>
+                                            <span className={styles.resolvingTxSmall}>
+                                              <span className={styles.buttonSpinner} /> Resolving TX...
+                                            </span>
+                                          </div>
+                                        ) : null}
+                                      </>
+                                    )}
+
+                                    {isRef && (
+                                      <>
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Refund Status</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            {bounty.state === BountyState.Refunded
+                                              ? 'Claimed onchain'
+                                              : 'Eligible to reclaim'}
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Refund Amount</span>
+                                          <span className={styles.creatorMetricValHighlight}>
+                                            {bounty.rewardMon} MON (100%)
+                                          </span>
+                                        </div>
+
+                                        {bounty.state === BountyState.Refunded && txDetails?.txHash ? (
+                                          <div className={styles.creatorTxRow}>
+                                            <span className={styles.creatorTxLabel}>Refund TX:</span>
+                                            <a
+                                              href={txDetails.explorerUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className={styles.creatorTxLink}
+                                              title={`Inspect on Monadscan: ${txDetails.txHash}`}
+                                            >
+                                              <span>
+                                                {txDetails.txHash.slice(0, 8)}...{txDetails.txHash.slice(-6)}
+                                              </span>
+                                              <Icon name="external" size={11} />
+                                            </a>
+                                            <button
+                                              type="button"
+                                              className={styles.copyTxBtn}
+                                              onClick={(e) => handleCopyTx(txDetails.txHash, e)}
+                                              title="Copy refund transaction hash"
+                                            >
+                                              <Icon
+                                                name={copiedTxHash === txDetails.txHash ? 'check-copy' : 'copy'}
+                                                size={11}
+                                              />
+                                            </button>
+                                          </div>
+                                        ) : bounty.state === BountyState.Refunded ? (
+                                          <div className={styles.creatorTxRow}>
+                                            <span className={styles.resolvingTxSmall}>
+                                              <span className={styles.buttonSpinner} /> Resolving TX...
+                                            </span>
+                                          </div>
+                                        ) : null}
+                                      </>
+                                    )}
+
+                                    {isDisp && (
+                                      <>
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Status Notice</span>
+                                          <span className={styles.creatorMetricVal}>
+                                            Review window expired
+                                          </span>
+                                        </div>
+
+                                        <div className={styles.creatorMetricItem}>
+                                          <span className={styles.creatorMetricLabel}>Resolver</span>
+                                          <span className={styles.creatorMetricValMono}>
+                                            {bounty.disputeResolver.slice(0, 6)}...{bounty.disputeResolver.slice(-4)}
+                                          </span>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Action Row */}
+                                <div className={styles.creatorCardActions}>
+                                  {isNeedsRev && (
+                                    <button
+                                      type="button"
+                                      className={styles.creatorBtnReview}
+                                      onClick={() => handleViewBounty(bounty.bountyId)}
+                                      id={`creator-review-btn-${bounty.bountyId}`}
+                                    >
+                                      <span>Review Submissions</span>
+                                      <Icon name="arrow" size={14} />
+                                    </button>
+                                  )}
+
+                                  {classification.isActive && (
+                                    <button
+                                      type="button"
+                                      className={styles.creatorBtnView}
+                                      onClick={() => handleViewBounty(bounty.bountyId)}
+                                      id={`creator-view-active-btn-${bounty.bountyId}`}
+                                    >
+                                      <span>View Bounty</span>
+                                      <Icon name="arrow" size={14} />
+                                    </button>
+                                  )}
+
+                                  {isComp && (
+                                    <button
+                                      type="button"
+                                      className={styles.creatorBtnView}
+                                      onClick={() => handleViewBounty(bounty.bountyId)}
+                                      id={`creator-view-settled-btn-${bounty.bountyId}`}
+                                    >
+                                      <span>View Settlement</span>
+                                      <Icon name="arrow" size={14} />
+                                    </button>
+                                  )}
+
+                                  {isRef && (
+                                    bounty.state === BountyState.Refunded ? (
+                                      <button
+                                        type="button"
+                                        className={styles.creatorBtnView}
+                                        onClick={() => handleViewBounty(bounty.bountyId)}
+                                        id={`creator-view-refunded-btn-${bounty.bountyId}`}
+                                      >
+                                        <span>View Refund</span>
+                                        <Icon name="arrow" size={14} />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className={styles.creatorBtnRefund}
+                                        onClick={() => handleClaimRefund(bounty.bountyId)}
+                                        id={`creator-claim-refund-btn-${bounty.bountyId}`}
+                                      >
+                                        <span>Claim Refund ({bounty.rewardMon} MON)</span>
+                                      </button>
+                                    )
+                                  )}
+
+                                  {isDisp && (
+                                    <button
+                                      type="button"
+                                      className={styles.creatorBtnView}
+                                      onClick={() => handleViewBounty(bounty.bountyId)}
+                                      id={`creator-view-dispute-btn-${bounty.bountyId}`}
+                                    >
+                                      <span>View Bounty</span>
+                                      <Icon name="arrow" size={14} />
+                                    </button>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className={styles.discoveryWrapper}>
                 {/* Discovery Sub-tabs & Filter Controls */}
                 <div className={styles.discoveryHeader}>
                   <div className={styles.subTabGroup}>
@@ -1300,13 +2088,14 @@ export function ContractInspector({
                   </>
                 )}
               </div>
+              )
             ) : (
               /* DETAILED BOUNTY VIEW (Preserved existing detail logic) */
               <div className={styles.detailWrapper}>
                 {/* Detail Navigation Header */}
                 <div className={styles.detailNav}>
                   <button className={styles.backButton} onClick={handleBackToList}>
-                    &larr; Back to {exploreView === 'active' ? 'Active Bounties' : 'Completed Bounties'}
+                    &larr; Back to {myBountiesOnly ? 'My Bounties' : exploreView === 'active' ? 'Active Bounties' : 'Completed Bounties'}
                   </button>
                   <div className={styles.detailNavRight}>
                     <a
